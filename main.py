@@ -5,8 +5,9 @@ from docx import Document
 from pptx import Presentation
 import httpx, io, os
 
-app = FastAPI(title="JARVIS Scholar", description="Document intelligence powered by JARVIS.", version="4.1.0")
-JARVIS_API_URL = os.getenv("JARVIS_API_URL", "http://127.0.0.1:8000").rstrip("/")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="5.0.0")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
 uploaded_document_text = ""
 uploaded_document_name = ""
 uploaded_document_type = ""
@@ -137,13 +138,9 @@ async def website():
 
 @app.get("/jarvis-status")
 async def jarvis_status():
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(f"{JARVIS_API_URL}/health")
-            response.raise_for_status()
-        return {"connected": True, "jarvis": response.json()}
-    except Exception as error:
-        return {"connected": False, "error": str(error)}
+    if not GEMINI_API_KEY:
+        return {"connected": False, "error": "GEMINI_API_KEY is not configured."}
+    return {"connected": True, "jarvis": {"brain": f"Cloud AI • {GEMINI_MODEL}"}}
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
@@ -180,20 +177,67 @@ async def ask_question(question: str = Form(...)):
         return {"error": "Upload a document before asking a question."}
     if not question.strip():
         return {"error": "Please enter a question."}
+    if not GEMINI_API_KEY:
+        return {"error": "Cloud AI is not configured on the server."}
+
+    context_limit = 120000
+    document_context = uploaded_document_text[:context_limit]
+    context_truncated = len(uploaded_document_text) > context_limit
     history = "\n".join(f"{x['role'].upper()}: {x['content']}" for x in chat_history[-8:])
-    combined = question.strip() if not history else f"Use the previous document conversation only to understand follow-up references.\n\n{history}\n\nNEW USER QUESTION:\n{question.strip()}"
-    payload = {"document_name": uploaded_document_name, "context": uploaded_document_text, "question": combined}
+    prompt = f"""You are JARVIS Scholar, an AI document-analysis assistant created by Saleh Pour.
+Answer using the uploaded document as the primary source. Do not invent facts that are not supported by the document. If the answer is not in the document, say so clearly. Be concise but useful. Use previous conversation only to understand follow-up references.
+
+DOCUMENT NAME:
+{uploaded_document_name}
+
+DOCUMENT CONTENT:
+{document_context}
+
+PREVIOUS DOCUMENT CONVERSATION:
+{history or '(none)'}
+
+USER QUESTION:
+{question.strip()}
+"""
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048},
+    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(f"{JARVIS_API_URL}/api/document-query", json=payload)
+            response = await client.post(
+                url,
+                headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
+                json=payload,
+            )
         if response.status_code != 200:
-            return {"error": f"JARVIS returned HTTP {response.status_code}."}
+            try:
+                detail = response.json().get("error", {}).get("message", "")
+            except Exception:
+                detail = response.text[:300]
+            return {"error": f"Cloud AI returned HTTP {response.status_code}: {detail or 'request failed'}"}
         result = response.json()
-        answer = result.get("answer", "")
-        chat_history += [{"role": "user", "content": question.strip()}, {"role": "assistant", "content": answer}]
-        return {"document": uploaded_document_name, "document_type": uploaded_document_type, "answer": answer, "brain": result.get("brain"), "context_truncated": result.get("context_truncated", False)}
+        candidates = result.get("candidates") or []
+        if not candidates:
+            return {"error": "Cloud AI returned no answer."}
+        parts = candidates[0].get("content", {}).get("parts", [])
+        answer = "\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
+        if not answer:
+            return {"error": "Cloud AI returned an empty answer."}
+        chat_history += [
+            {"role": "user", "content": question.strip()},
+            {"role": "assistant", "content": answer},
+        ]
+        return {
+            "document": uploaded_document_name,
+            "document_type": uploaded_document_type,
+            "answer": answer,
+            "brain": GEMINI_MODEL,
+            "context_truncated": context_truncated,
+        }
     except Exception as error:
-        return {"error": f"JARVIS request failed: {error}"}
+        return {"error": f"Cloud AI request failed: {error}"}
 
 @app.post("/clear-chat")
 def clear_chat():
