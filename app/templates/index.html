@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>JARVIS Scholar</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+
+<body>
+
+    <div class="page">
+
+        <!-- NAVIGATION -->
+        <header class="nav">
+
+            <div class="brand">
+
+                <div class="brand-mark">
+                    J
+                </div>
+
+                <div>
+                    <div class="brand-name">
+                        JARVIS Scholar
+                    </div>
+
+                    <div class="brand-sub">
+                        Document AI
+                    </div>
+                </div>
+
+            </div>
+
+
+            <div class="nav-right">
+
+                <div class="status">
+
+                    <span
+                        id="statusDot"
+                        class="status-dot"
+                    ></span>
+
+                    <span id="statusText">
+                        Checking JARVIS...
+                    </span>
+
+                </div>
+
+            </div>
+
+        </header>
+
+
+        <!-- HERO -->
+        <section class="hero">
+
+            <div class="hero-copy">
+
+                <div class="eyebrow">
+                    Powered by your JARVIS system
+                </div>
+
+                <h1>
+                    Understand any document without
+                    digging through every page.
+                </h1>
+
+                <p>
+                    Upload a PDF, ask questions, get summaries,
+                    pull out key points, or turn it into a study
+                    guide using JARVIS.
+                </p>
+
+            </div>
+
+        </section>
+
+
+        <!-- WORKSPACE -->
+        <section class="workspace">
+
+
+            <!-- UPLOAD SIDE -->
+            <div class="upload-card">
+
+                <div class="section-heading">
+
+                    <span class="step">
+                        01
+                    </span>
+
+                    <div>
+
+                        <h2>
+                            Upload your document
+                        </h2>
+
+                        <p>
+                            PDF files only for now.
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <label
+                    class="dropzone"
+                    for="pdfFile"
+                >
+
+                    <div class="upload-icon">
+                        ↑
+                    </div>
+
+                    <div class="drop-title">
+                        Choose a PDF
+                    </div>
+
+                    <div class="drop-sub">
+                        Click here to select a file
+                        from your computer
+                    </div>
+
+                    <input
+                        id="pdfFile"
+                        type="file"
+                        accept=".pdf,application/pdf"
+                    >
+
+                </label>
+
+
+                <button
+                    id="uploadBtn"
+                    class="primary full"
+                    onclick="uploadPDF()"
+                >
+                    Upload document
+                </button>
+
+
+                <div
+                    id="documentInfo"
+                    class="document-info"
+                >
+                    No document uploaded yet.
+                </div>
+
+
+                <div class="quick-title">
+                    Quick actions
+                </div>
+
+
+                <div class="quick-actions">
+
+                    <button
+                        onclick="quickAsk('Summarise this document clearly.')"
+                    >
+                        Summarise
+                    </button>
+
+
+                    <button
+                        onclick="quickAsk('Explain the main points in simple terms.')"
+                    >
+                        Explain simply
+                    </button>
+
+
+                    <button
+                        onclick="quickAsk('What are the most important points in this document?')"
+                    >
+                        Key points
+                    </button>
+
+
+                    <button
+                        onclick="quickAsk('Create a concise study guide from this document.')"
+                    >
+                        Study guide
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <!-- CHAT SIDE -->
+            <div class="chat-card">
+
+                <div class="chat-top">
+
+                    <div class="section-heading">
+
+                        <span class="step">
+                            02
+                        </span>
+
+                        <div>
+
+                            <h2>
+                                Ask JARVIS
+                            </h2>
+
+                            <p>
+                                Keep asking follow-up questions
+                                without re-uploading.
+                            </p>
+
+                        </div>
+
+                    </div>
+
+
+                    <button
+                        class="ghost"
+                        onclick="clearChat()"
+                    >
+                        Clear chat
+                    </button>
+
+                </div>
+
+
+                <!-- MESSAGES -->
+                <div
+                    id="messages"
+                    class="messages"
+                >
+
+                    <div
+                        id="emptyState"
+                        class="empty-state"
+                    >
+
+                        <div class="empty-mark">
+                            J
+                        </div>
+
+                        <h3>
+                            Ready when you are.
+                        </h3>
+
+                        <p>
+                            Upload a PDF, then ask JARVIS
+                            anything about it.
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <!-- QUESTION BOX -->
+                <div class="composer">
+
+                    <textarea
+                        id="question"
+                        placeholder="Ask something about your document..."
+                    ></textarea>
+
+
+                    <div class="composer-bottom">
+
+                        <span>
+                            Enter to send · Shift + Enter
+                            for a new line
+                        </span>
+
+
+                        <button
+                            id="askBtn"
+                            class="primary"
+                            onclick="askJarvis()"
+                        >
+                            Ask JARVIS
+                        </button>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- FOOTER -->
+        <footer class="footer">
+
+            <span>
+                JARVIS Scholar
+            </span>
+
+            <span>
+                Built by Saleh Pour
+            </span>
+
+        </footer>
+
+    </div>
+
+
+    <script src="/static/app.js"></script>
+
+</body>
+</html>
