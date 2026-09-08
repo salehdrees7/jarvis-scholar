@@ -5,7 +5,7 @@ from docx import Document
 from pptx import Presentation
 import httpx, io, os
 
-app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="5.0.0")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="6.0.0")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
 uploaded_document_text = ""
@@ -25,7 +25,7 @@ h1{margin:0;font-size:22px;letter-spacing:.15em}.muted,.status{color:var(--muted
 .layout{display:grid;grid-template-columns:330px 1fr;gap:20px}.card{background:var(--panel);border:1px solid var(--border);border-radius:18px}.side{padding:20px;min-height:680px}
 .drop{margin-top:18px;padding:22px 14px;text-align:center;border:1.5px dashed #31566f;border-radius:14px;background:#0a1724}.drop strong{display:block;margin-bottom:8px}input[type=file]{width:100%;margin-top:14px;color:var(--muted)}
 button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:700;cursor:pointer}.primary{background:#57c7ff;color:#03131e}.secondary{background:#14283a;color:var(--text);border:1px solid var(--border)}.full{width:100%;margin-top:12px}
-.info{margin-top:14px;padding:12px;border:1px solid #17334a;border-radius:11px;background:#091724;color:var(--muted);font-size:13px;white-space:pre-wrap}.quick{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px}.quick button{background:#10263a;color:#cdefff;border:1px solid #224761;font-size:12px}
+.info{margin-top:14px;padding:12px;border:1px solid #17334a;border-radius:11px;background:#091724;color:var(--muted);font-size:13px;white-space:pre-wrap}.quick{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px}.quick button{background:#10263a;color:#cdefff;border:1px solid #224761;font-size:12px}.langbox{margin-top:14px}.langbox label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.langbox select{width:100%;background:#091724;color:var(--text);border:1px solid #224761;border-radius:11px;padding:10px 12px;font:inherit}.mic{white-space:nowrap}
 .chat{display:flex;flex-direction:column;min-height:680px;overflow:hidden}.head{padding:18px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between}.messages{flex:1;padding:22px;overflow:auto;max-height:540px}.empty{text-align:center;color:var(--muted);padding:90px 20px}
 .msg{max-width:82%;margin-bottom:14px;padding:13px 15px;border-radius:14px;white-space:pre-wrap;line-height:1.6}.user{margin-left:auto;background:#15354b}.assistant{margin-right:auto;background:#0c2232}.role{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}
 .composer{padding:16px;border-top:1px solid var(--border);background:#0a1724}textarea{width:100%;min-height:84px;border-radius:13px;border:1px solid var(--border);background:#07131f;color:var(--text);padding:13px;font:inherit}.row{display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px}
@@ -35,7 +35,8 @@ button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:70
 <div class="layout"><aside class="card side"><h2>Document</h2><p class="muted">Upload a document, then chat with JARVIS about it.</p>
 <div class="drop"><strong>Select a document</strong><span class="muted">PDF • Word • PowerPoint • TXT</span><input id="documentFile" type="file" accept=".pdf,.docx,.pptx,.txt"></div>
 <button id="uploadBtn" class="primary full" onclick="uploadDocument()">Upload document</button><div id="docInfo" class="info">No document uploaded.</div>
-<div class="quick"><button onclick="quickAsk('Summarise this document clearly.')">Summarise</button><button onclick="quickAsk('Explain the main points in simple terms.')">Explain simply</button><button onclick="quickAsk('What are the most important points in this document?')">Key points</button><button onclick="quickAsk('Create a concise study guide from this document.')">Study guide</button></div></aside>
+<div class="langbox"><label for="language">Response & voice language</label><select id="language"><option value="auto">Auto-detect</option><option value="en">English</option><option value="ar">Arabic</option><option value="fr">French</option><option value="es">Spanish</option><option value="mr">Marathi</option></select></div>
+<div class="quick"><button onclick="quickAsk('Summarise this document clearly.')">Summarise</button><button onclick="quickAsk('Explain the main points in simple terms.')">Explain simply</button><button onclick="quickAsk('What are the most important points in this document?')">Key points</button><button onclick="quickAsk('Create a concise study guide from this document.')">Study guide</button><button onclick="quickAsk('Critique this document and identify its weaknesses, gaps and risks.')">Critique</button><button onclick="quickAsk('How can I improve this document? Give specific actionable changes.')">Improve</button></div></aside>
 <section class="card chat"><div class="head"><div><h2>Chat with JARVIS</h2><div class="muted">Ask follow-up questions without re-uploading the document.</div></div><button class="secondary" onclick="clearChat()">Clear chat</button></div>
 <div id="messages" class="messages"><div class="empty" id="emptyState">Upload a document on the left, then ask JARVIS anything about it.</div></div>
 <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:10px">
@@ -46,37 +47,100 @@ button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:70
 <button class="secondary" onclick="stopSpeech()">⏹ Stop</button>
 </div>
 </div>
-<div class="composer"><textarea id="question" placeholder="Ask something about the document..."></textarea><div class="row"><span class="muted">Follow-up questions use the same uploaded document.</span><button id="askBtn" class="primary" onclick="askJarvis()">Ask JARVIS</button></div></div></section></div>
+<div class="composer"><textarea id="question" placeholder="Ask anything: improve it, rewrite it, explain it, translate it, compare it..."></textarea><div class="row"><span class="muted">JARVIS can analyse, critique, improve, rewrite, translate and teach from the document.</span><div style="display:flex;gap:8px"><button class="secondary mic" onclick="startDictation()">🎙 Speak</button><button id="askBtn" class="primary" onclick="askJarvis()">Ask JARVIS</button></div></div></div></section></div>
 <footer style="text-align:center;color:#98adbf;font-size:12px;padding:24px 10px 4px">
 <strong style="color:#f3f7fb">JARVIS Scholar</strong> — Built by <strong style="color:#cdefff">Saleh Pour</strong><br>
 <span>Robotics &amp; Artificial Intelligence</span>
 </footer></main>
 <script>
 let currentSpeech=null;
-function chooseVoice(){
- const voices=window.speechSynthesis.getVoices();
- return voices.find(v=>v.lang.toLowerCase().startsWith("en-gb") &&
-   ["ryan","george","arthur","daniel","oliver"].some(n=>v.name.toLowerCase().includes(n)))
-   || voices.find(v=>v.lang.toLowerCase().startsWith("en-gb"))
-   || voices.find(v=>v.lang.toLowerCase().startsWith("en"))
-   || voices[0] || null;
+let recognition=null;
+
+const LANGUAGE_SETTINGS={
+ auto:{name:"Auto",locale:"en-GB",prefix:""},
+ en:{name:"English",locale:"en-GB",prefix:"en"},
+ ar:{name:"Arabic",locale:"ar-SA",prefix:"ar"},
+ fr:{name:"French",locale:"fr-FR",prefix:"fr"},
+ es:{name:"Spanish",locale:"es-ES",prefix:"es"},
+ mr:{name:"Marathi",locale:"mr-IN",prefix:"mr"}
+};
+
+function selectedLanguage(){
+ return document.getElementById("language")?.value || "auto";
 }
+
+function detectLanguageFromText(text){
+ const chosen=selectedLanguage();
+ if(chosen!=="auto") return chosen;
+ if(/[\u0600-\u06FF]/.test(text)) return "ar";
+ if(/[\u0900-\u097F]/.test(text)) return "mr";
+ const lower=" "+text.toLowerCase()+" ";
+ const spanish=[" el "," la "," los "," las "," que "," para "," con "," una "," por "," como "," esto "," esta "," gracias "," mejorar "," documento "];
+ const french=[" le "," les "," des "," une "," pour "," avec "," dans "," est "," comment "," merci "," améliorer "," document "," résumé "];
+ let es=spanish.filter(w=>lower.includes(w)).length;
+ let fr=french.filter(w=>lower.includes(w)).length;
+ if(/[ñ¿¡]/i.test(text)) es+=3;
+ if(/[àâçéèêëîïôùûüÿœ]/i.test(text)) fr+=2;
+ if(es>fr && es>=2) return "es";
+ if(fr>es && fr>=2) return "fr";
+ return "en";
+}
+
+function chooseVoice(langCode){
+ const voices=window.speechSynthesis.getVoices();
+ const cfg=LANGUAGE_SETTINGS[langCode]||LANGUAGE_SETTINGS.en;
+ const prefix=(cfg.prefix||"en").toLowerCase();
+ const exact=voices.find(v=>v.lang.toLowerCase()===cfg.locale.toLowerCase());
+ if(exact) return exact;
+ const same=voices.find(v=>v.lang.toLowerCase().startsWith(prefix));
+ if(same) return same;
+ if(langCode==="en"){
+   return voices.find(v=>v.lang.toLowerCase().startsWith("en-gb") &&
+     ["ryan","george","arthur","daniel","oliver"].some(n=>v.name.toLowerCase().includes(n)))
+     || voices.find(v=>v.lang.toLowerCase().startsWith("en-gb"))
+     || voices.find(v=>v.lang.toLowerCase().startsWith("en"));
+ }
+ return voices.find(v=>v.lang.toLowerCase().startsWith("en")) || voices[0] || null;
+}
+
 function speakText(text){
  if(!("speechSynthesis" in window)){document.getElementById("voiceStatus").textContent="Speech unavailable";return;}
  window.speechSynthesis.cancel();
+ const langCode=detectLanguageFromText(text);
+ const cfg=LANGUAGE_SETTINGS[langCode]||LANGUAGE_SETTINGS.en;
  currentSpeech=new SpeechSynthesisUtterance(text);
- const voice=chooseVoice();
+ const voice=chooseVoice(langCode);
  if(voice) currentSpeech.voice=voice;
- currentSpeech.lang=voice?.lang||"en-GB";
- currentSpeech.rate=.96; currentSpeech.pitch=.92; currentSpeech.volume=1;
- currentSpeech.onstart=()=>document.getElementById("voiceStatus").textContent="JARVIS is speaking...";
+ currentSpeech.lang=voice?.lang||cfg.locale;
+ currentSpeech.rate=.96; currentSpeech.pitch=.94; currentSpeech.volume=1;
+ currentSpeech.onstart=()=>document.getElementById("voiceStatus").textContent=`JARVIS is speaking • ${cfg.name}`;
  currentSpeech.onend=()=>document.getElementById("voiceStatus").textContent="Voice ready";
  currentSpeech.onerror=()=>document.getElementById("voiceStatus").textContent="Voice stopped";
  window.speechSynthesis.speak(currentSpeech);
 }
+
 function pauseSpeech(){if(window.speechSynthesis.speaking&&!window.speechSynthesis.paused){window.speechSynthesis.pause();document.getElementById("voiceStatus").textContent="Voice paused";}}
 function resumeSpeech(){if(window.speechSynthesis.paused){window.speechSynthesis.resume();document.getElementById("voiceStatus").textContent="JARVIS is speaking...";}}
 function stopSpeech(){if("speechSynthesis" in window)window.speechSynthesis.cancel();currentSpeech=null;const s=document.getElementById("voiceStatus");if(s)s.textContent="Voice ready";}
+
+function startDictation(){
+ const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+ if(!SR){document.getElementById("voiceStatus").textContent="Voice input is not supported by this browser";return;}
+ if(recognition){try{recognition.stop()}catch{} recognition=null;}
+ recognition=new SR();
+ const chosen=selectedLanguage();
+ recognition.lang=(LANGUAGE_SETTINGS[chosen]||LANGUAGE_SETTINGS.en).locale;
+ recognition.interimResults=false;
+ recognition.continuous=false;
+ recognition.onstart=()=>document.getElementById("voiceStatus").textContent="Listening...";
+ recognition.onerror=e=>document.getElementById("voiceStatus").textContent="Voice input: "+e.error;
+ recognition.onend=()=>{if(document.getElementById("voiceStatus").textContent==="Listening...")document.getElementById("voiceStatus").textContent="Voice ready";recognition=null;};
+ recognition.onresult=e=>{
+   const heard=e.results?.[0]?.[0]?.transcript||"";
+   if(heard){document.getElementById("question").value=heard;document.getElementById("voiceStatus").textContent="Heard you • ready to send";}
+ };
+ recognition.start();
+}
 
 async function checkJarvis(){let d=document.getElementById("statusDot"),t=document.getElementById("statusText");try{let r=await fetch("/jarvis-status"),x=await r.json();if(x.connected){d.classList.add("online");t.textContent="JARVIS online • "+(x.jarvis?.brain||"Local AI")}else{d.classList.remove("online");t.textContent="JARVIS offline"}}catch{d.classList.remove("online");t.textContent="JARVIS offline"}}
 function addMessage(role,text){let m=document.getElementById("messages"),e=document.getElementById("emptyState");if(e)e.remove();let d=document.createElement("div");d.className="msg "+role;let l=document.createElement("span");l.className="role";l.textContent=role==="user"?"You":"JARVIS";let c=document.createElement("div");c.textContent=text;d.append(l,c);
@@ -95,7 +159,7 @@ if(role==="assistant"){
 m.appendChild(d);m.scrollTop=m.scrollHeight}
 async function uploadDocument(){let f=document.getElementById("documentFile"),i=document.getElementById("docInfo"),b=document.getElementById("uploadBtn");if(!f.files.length){i.textContent="Choose a document first.";return}let fd=new FormData();fd.append("file",f.files[0]);b.disabled=true;i.textContent="Uploading and extracting text...";try{let r=await fetch("/upload",{method:"POST",body:fd}),x=await r.json();i.textContent=x.error?"Error: "+x.error:`Ready: ${x.filename}\n${x.document_type} • ${x.structure} • ${x.characters_extracted.toLocaleString()} characters`;if(!x.error)await clearChat(false)}catch(e){i.textContent="Upload failed: "+e.message}finally{b.disabled=false}}
 async function quickAsk(q){document.getElementById("question").value=q;await askJarvis()}
-async function askJarvis(){let q=document.getElementById("question"),text=q.value.trim(),b=document.getElementById("askBtn");if(!text)return;addMessage("user",text);q.value="";b.disabled=true;let fd=new FormData();fd.append("question",text);try{let r=await fetch("/ask",{method:"POST",body:fd}),x=await r.json();addMessage("assistant",x.error?"Error: "+x.error:(x.answer||"JARVIS returned an empty response."))}catch(e){addMessage("assistant","Request failed: "+e.message)}finally{b.disabled=false}}
+async function askJarvis(){let q=document.getElementById("question"),text=q.value.trim(),b=document.getElementById("askBtn");if(!text)return;addMessage("user",text);q.value="";b.disabled=true;let fd=new FormData();fd.append("question",text);fd.append("language",selectedLanguage());try{let r=await fetch("/ask",{method:"POST",body:fd}),x=await r.json();addMessage("assistant",x.error?"Error: "+x.error:(x.answer||"JARVIS returned an empty response."))}catch(e){addMessage("assistant","Request failed: "+e.message)}finally{b.disabled=false}}
 async function clearChat(clear=true){try{await fetch("/clear-chat",{method:"POST"})}catch{}document.getElementById("messages").innerHTML='<div class="empty" id="emptyState">Upload a document on the left, then ask JARVIS anything about it.</div>';if(clear)document.getElementById("question").value=""}
 document.getElementById("question").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();askJarvis()}});checkJarvis();setInterval(checkJarvis,10000);
 </script></body></html>"""
@@ -171,7 +235,7 @@ async def upload_document(file: UploadFile = File(...)):
     return {"filename": file.filename, "document_type": kind, "structure": structure, "characters_extracted": len(text)}
 
 @app.post("/ask")
-async def ask_question(question: str = Form(...)):
+async def ask_question(question: str = Form(...), language: str = Form("auto")):
     global chat_history
     if not uploaded_document_text:
         return {"error": "Upload a document before asking a question."}
@@ -180,12 +244,55 @@ async def ask_question(question: str = Form(...)):
     if not GEMINI_API_KEY:
         return {"error": "Cloud AI is not configured on the server."}
 
+    supported_languages = {
+        "auto": "Automatically detect the language of the user's latest message and answer in that same language.",
+        "en": "Answer entirely in natural English.",
+        "ar": "Answer entirely in natural Arabic.",
+        "fr": "Answer entirely in natural French.",
+        "es": "Answer entirely in natural Spanish.",
+        "mr": "Answer entirely in natural Marathi (मराठी).",
+    }
+    language_instruction = supported_languages.get(language, supported_languages["auto"])
+
     context_limit = 120000
     document_context = uploaded_document_text[:context_limit]
     context_truncated = len(uploaded_document_text) > context_limit
-    history = "\n".join(f"{x['role'].upper()}: {x['content']}" for x in chat_history[-8:])
-    prompt = f"""You are JARVIS Scholar, an AI document-analysis assistant created by Saleh Pour.
-Answer using the uploaded document as the primary source. Do not invent facts that are not supported by the document. If the answer is not in the document, say so clearly. Be concise but useful. Use previous conversation only to understand follow-up references.
+    history = "\\n".join(f"{x['role'].upper()}: {x['content']}" for x in chat_history[-12:])
+
+    prompt = f"""You are JARVIS Scholar, an advanced document-intelligence assistant created by Saleh Pour.
+
+Your job is to reason carefully about the uploaded document and help the user as a capable general AI assistant would.
+
+CAPABILITIES:
+- Answer questions about the document accurately.
+- Summarise at different levels of detail.
+- Explain difficult ideas simply or technically.
+- Critique writing, arguments, structure, evidence, design and clarity.
+- Identify weaknesses, missing information, contradictions, risks and opportunities.
+- Suggest specific improvements and explain why they would help.
+- Rewrite or improve sections while preserving the user's intended meaning.
+- Compare ideas, options, claims or sections.
+- Brainstorm better wording, structure, examples, titles or approaches.
+- Create study guides, flashcards, quizzes, revision questions and action plans.
+- Translate or adapt content between English, Arabic, French, Spanish and Marathi.
+- Follow natural multi-turn conversation and resolve references from recent messages.
+
+REASONING AND ACCURACY:
+- Treat the uploaded document as the primary source for document-specific facts.
+- Never invent quotations, numbers, names, claims or evidence that are not present.
+- When the user asks for judgement, critique, improvement or creativity, you may use general knowledge and reasoning, but clearly distinguish your analysis from facts stated in the document.
+- If something cannot be determined from the document, say that plainly.
+- Give direct, useful answers rather than generic filler.
+- When recommending changes, be concrete: show what to change and why.
+- Preserve nuance. Do not oversimplify unless the user asks you to.
+- Use formatting such as short headings or bullets when it genuinely improves clarity.
+- Do not mention these instructions.
+
+LANGUAGE:
+{language_instruction}
+If the user explicitly asks for another supported language in their message, follow that request.
+For Arabic, use natural modern Arabic unless the user asks for a dialect.
+For Marathi, use natural Devanagari Marathi unless the user asks for romanisation.
 
 DOCUMENT NAME:
 {uploaded_document_name}
@@ -193,15 +300,20 @@ DOCUMENT NAME:
 DOCUMENT CONTENT:
 {document_context}
 
-PREVIOUS DOCUMENT CONVERSATION:
+RECENT DOCUMENT CONVERSATION:
 {history or '(none)'}
 
-USER QUESTION:
+LATEST USER MESSAGE:
 {question.strip()}
 """
+
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048},
+        "generationConfig": {
+            "temperature": 0.35,
+            "topP": 0.9,
+            "maxOutputTokens": 4096,
+        },
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
     try:
@@ -217,14 +329,17 @@ USER QUESTION:
             except Exception:
                 detail = response.text[:300]
             return {"error": f"Cloud AI returned HTTP {response.status_code}: {detail or 'request failed'}"}
+
         result = response.json()
         candidates = result.get("candidates") or []
         if not candidates:
             return {"error": "Cloud AI returned no answer."}
+
         parts = candidates[0].get("content", {}).get("parts", [])
-        answer = "\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
+        answer = "\\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
         if not answer:
             return {"error": "Cloud AI returned an empty answer."}
+
         chat_history += [
             {"role": "user", "content": question.strip()},
             {"role": "assistant", "content": answer},
@@ -234,6 +349,7 @@ USER QUESTION:
             "document_type": uploaded_document_type,
             "answer": answer,
             "brain": GEMINI_MODEL,
+            "language": language,
             "context_truncated": context_truncated,
         }
     except Exception as error:
