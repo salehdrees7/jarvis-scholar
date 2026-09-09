@@ -5,7 +5,7 @@ from docx import Document
 from pptx import Presentation
 import httpx, io, os, base64
 
-app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="9.0.0")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="12.0.0")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
@@ -113,17 +113,33 @@ async function speakText(text){
    const r=await fetch("/tts",{method:"POST",body:fd});
    if(!r.ok){
      let msg="Voice generation failed.";
-     try{const x=await r.json();msg=x.error||msg;}catch{}
+     try{
+       const x=await r.json();
+       msg=x.error||msg;
+     }catch{
+       try{msg=(await r.text())||msg;}catch{}
+     }
      status.textContent=msg;
+     console.error("JARVIS TTS:", msg);
      return;
    }
-   const blob=await r.blob();
+   const rawBlob=await r.blob();
+   const blob=new Blob([await rawBlob.arrayBuffer()],{type:"audio/wav"});
    currentAudioUrl=URL.createObjectURL(blob);
-   currentAudio=new Audio(currentAudioUrl);
+   currentAudio=new Audio();
+   currentAudio.preload="auto";
+   currentAudio.src=currentAudioUrl;
    const cfg=LANGUAGE_SETTINGS[lang]||LANGUAGE_SETTINGS.en;
    currentAudio.onplay=()=>status.textContent=`JARVIS is speaking • ${cfg.name}`;
    currentAudio.onended=()=>{status.textContent="Voice ready";cleanupAudio();};
-   currentAudio.onerror=()=>{status.textContent="Voice playback failed";cleanupAudio();};
+   currentAudio.onerror=()=>{
+     const mediaError=currentAudio?.error;
+     const code=mediaError?.code||"unknown";
+     status.textContent=`Voice playback failed (media error ${code})`;
+     console.error("JARVIS audio element error",mediaError);
+     cleanupAudio();
+   };
+   currentAudio.load();
    await currentAudio.play();
  }catch(e){
    status.textContent="Voice failed: "+e.message;
@@ -270,87 +286,88 @@ async def text_to_speech(text: str = Form(...), language: str = Form("auto")):
             media_type="application/json",
         )
 
-    spoken_text = spoken_text[:9000]
+    spoken_text = spoken_text[:8000]
 
     voice_profiles = {
         "en": {
             "voice": "Enceladus",
-            "direction": """A very human adult British male voice inspired by a refined personal AI butler: polished, posh, intelligent, calm and conversational.
-Use natural British English pronunciation with a subtle RP / educated London character, never American.
-
-The performance must feel like a person speaking spontaneously to one listener, not like a narrator reading text.
-Use realistic phrasing, uneven micro-pauses, tiny timing imperfections, gentle changes in tempo, and subtle emphasis shifts.
-At the ends of some sentences, let the voice soften naturally instead of landing every line with the same cadence.
-Between selected sentences or thought groups, include a quiet natural inhale or breath where a real speaker would need one.
-The breathing should be audible but subtle: occasional, irregular and organic, never forced, never after every sentence, and never spoken as literal words.
-Where appropriate, allow very light conversational hesitation or thinking rhythm before a complex point, but do not insert distracting filler into factual answers.
-Short answers should sound effortless. Longer answers should breathe, pace themselves and feel physically spoken.
-Avoid announcer cadence, audiobook cadence, commercial polish, exaggerated acting, robotic timing, over-enunciation or sing-song prosody.
-The overall result should sound like an intelligent human assistant standing nearby and speaking naturally."""
+            "direction": """Use a very human adult British male voice: refined, posh, intelligent, calm and conversational.
+Use natural British pronunciation with a subtle RP / educated London character, never American.
+Do not sound like an announcer, audiobook narrator or commercial voice-over.
+Use natural uneven pacing, tiny micro-pauses, soft sentence endings, subtle emphasis shifts and occasional quiet breaths between thought groups.
+Breathing should be irregular and restrained, like a real person speaking naturally. Never say the words 'breath', 'inhale', 'pause' or 'sigh'.
+Short answers should sound effortless; longer answers should naturally pace and breathe."""
         },
         "ar": {
             "voice": "Iapetus",
-            "direction": "Natural fluent Modern Standard Arabic, authentic Arabic pronunciation, calm intelligent male-assistant delivery, natural pacing."
+            "direction": "Use natural fluent Modern Standard Arabic with authentic Arabic pronunciation and a calm intelligent male delivery."
         },
         "fr": {
             "voice": "Iapetus",
-            "direction": "Native metropolitan French pronunciation with a convincing French accent, relaxed intelligent male delivery and natural pacing."
+            "direction": "Use native metropolitan French pronunciation with a convincing French accent and natural male conversational delivery."
         },
         "es": {
             "voice": "Iapetus",
-            "direction": "Native European Spanish pronunciation with a convincing Spain Spanish accent, relaxed intelligent male delivery and natural pacing."
+            "direction": "Use native European Spanish pronunciation with a convincing Spain Spanish accent and natural male conversational delivery."
         },
         "mr": {
             "voice": "Iapetus",
-            "direction": "Native Marathi pronunciation as spoken naturally in Maharashtra, India, with fluent rhythm and a calm intelligent male delivery."
+            "direction": "Use native Marathi pronunciation as spoken naturally in Maharashtra with fluent rhythm and calm male conversational delivery."
         },
         "auto": {
             "voice": "Iapetus",
-            "direction": "Detect the language of the text and use a convincing native pronunciation and natural human conversational delivery."
+            "direction": "Detect the language and speak it with convincing native pronunciation and natural human conversational pacing."
         },
     }
     profile = voice_profiles.get(language, voice_profiles["auto"])
 
-    tts_prompt = f"""AUDIO PROFILE
-You are the speaking voice of JARVIS Scholar.
+    tts_prompt = f"""You are the speaking voice of JARVIS Scholar.
 
-DIRECTOR'S NOTES
+VOICE DIRECTION
 {profile["direction"]}
 
-PERFORMANCE RULES
-- Preserve the meaning and wording of the supplied answer.
-- Do not translate, summarise, explain, add an introduction, or omit substantive content.
-- Do not read markdown symbols aloud.
-- Convert punctuation and paragraph structure into natural spoken phrasing instead of mechanically reading punctuation.
-- For English only, use subtle nonverbal performance such as a quiet inhale, soft exhale, tiny hesitation or brief thinking pause when it improves realism.
-- Never announce or verbalise stage directions such as "breath", "inhale", "pause" or "sigh".
-- Do not overuse nonverbal sounds; realism comes from restraint and irregularity.
-- Keep lists intelligible with short natural pauses.
-- The performance should sound like one person naturally speaking to the user.
+READING RULES
+- Read the answer faithfully.
+- Do not translate, summarise, add an introduction or omit substantive content.
+- Do not read markdown punctuation aloud.
+- Turn punctuation and paragraph structure into natural spoken phrasing.
+- For English, subtle nonverbal realism such as a quiet inhale or tiny hesitation is allowed when natural.
+- Never verbalise stage directions.
+- Keep the result restrained and convincingly human.
 
-TEXT TO SPEAK
+TEXT TO SPEAK:
 {spoken_text}
 """
 
+    # Use the officially documented Gemini generateContent TTS endpoint.
+    # Gemini returns 24 kHz, 16-bit, mono PCM in inlineData; we wrap it as WAV.
     payload = {
-        "model": "gemini-3.1-flash-tts-preview",
-        "input": tts_prompt,
-        "response_format": {"type": "audio"},
-        "generation_config": {
-            "speech_config": [
-                {"voice": profile["voice"]}
-            ]
-        },
+        "contents": [
+            {
+                "parts": [
+                    {"text": tts_prompt}
+                ]
+            }
+        ],
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": profile["voice"]
+                    }
+                }
+            }
+        }
     }
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
-                "https://generativelanguage.googleapis.com/v1beta/interactions",
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
                 headers={
                     "x-goog-api-key": GEMINI_API_KEY,
                     "Content-Type": "application/json",
-                    "Api-Revision": "2026-05-20",
                 },
                 json=payload,
             )
@@ -359,33 +376,52 @@ TEXT TO SPEAK
             try:
                 detail = response.json().get("error", {}).get("message", "")
             except Exception:
-                detail = response.text[:300]
+                detail = response.text[:500]
             return Response(
-                content='{"error":' + repr(f"Cloud voice returned HTTP {response.status_code}: {detail or 'request failed'}").replace("'", '"') + "}",
+                content='{"error":' + repr(
+                    f"Cloud voice returned HTTP {response.status_code}: {detail or 'request failed'}"
+                ).replace("'", '"') + "}",
                 status_code=502,
                 media_type="application/json",
             )
 
         result = response.json()
-        audio_block = None
-        for step in result.get("steps", []):
-            for block in step.get("content", []):
-                if block.get("type") == "audio" and block.get("data"):
-                    audio_block = block
-                    break
-            if audio_block:
-                break
 
-        if not audio_block:
+        try:
+            part = result["candidates"][0]["content"]["parts"][0]
+            inline = part.get("inlineData") or part.get("inline_data")
+            if not inline or not inline.get("data"):
+                raise KeyError("inlineData.data")
+            pcm_bytes = base64.b64decode(inline["data"])
+        except Exception:
             return Response(
-                content='{"error":"Cloud voice returned no audio."}',
+                content='{"error":"Gemini returned a response, but no TTS audio data was found."}',
                 status_code=502,
                 media_type="application/json",
             )
 
-        audio_bytes = base64.b64decode(audio_block["data"])
-        mime_type = audio_block.get("mime_type") or "audio/wav"
-        return Response(content=audio_bytes, media_type=mime_type)
+        # Gemini's documented TTS output is raw 24kHz signed 16-bit mono PCM.
+        # Wrap it in a standard WAV container so every modern browser can play it.
+        import wave
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(24000)
+            wav_file.writeframes(pcm_bytes)
+
+        wav_bytes = wav_buffer.getvalue()
+
+        return Response(
+            content=wav_bytes,
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": 'inline; filename="jarvis-voice.wav"',
+                "Content-Length": str(len(wav_bytes)),
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "no-store",
+            },
+        )
 
     except Exception as error:
         return Response(
