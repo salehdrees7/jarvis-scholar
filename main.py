@@ -1,13 +1,14 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pypdf import PdfReader
 from docx import Document
 from pptx import Presentation
-import httpx, io, os
+import httpx, io, os, base64
 
-app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="6.0.0")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="8.0.0")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
 uploaded_document_text = ""
 uploaded_document_name = ""
 uploaded_document_type = ""
@@ -32,13 +33,13 @@ button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:70
 @media(max-width:850px){.layout{grid-template-columns:1fr}.side{min-height:auto}}
 </style></head><body><main class="shell">
 <div class="top"><div class="brand"><div class="orb"></div><div><h1>JARVIS</h1><div class="muted">Scholar • Document Intelligence</div></div></div><div class="status"><span id="statusDot" class="dot"></span><span id="statusText">Checking JARVIS...</span></div></div>
-<div class="layout"><aside class="card side"><h2>Document</h2><p class="muted">Upload a document, then chat with JARVIS about it.</p>
-<div class="drop"><strong>Select a document</strong><span class="muted">PDF • Word • PowerPoint • TXT</span><input id="documentFile" type="file" accept=".pdf,.docx,.pptx,.txt"></div>
-<button id="uploadBtn" class="primary full" onclick="uploadDocument()">Upload document</button><div id="docInfo" class="info">No document uploaded.</div>
+<div class="layout"><aside class="card side"><h2>Document</h2><p class="muted">Chat with JARVIS straight away, or upload a document for document-aware assistance.</p>
+<div class="drop"><strong>Optional document</strong><span class="muted">PDF • Word • PowerPoint • TXT</span><input id="documentFile" type="file" accept=".pdf,.docx,.pptx,.txt"></div>
+<button id="uploadBtn" class="primary full" onclick="uploadDocument()">Upload document</button><button class="secondary full" onclick="removeDocument()">Remove document</button><div id="docInfo" class="info">No document • General chat mode</div>
 <div class="langbox"><label for="language">Response & voice language</label><select id="language"><option value="auto">Auto-detect</option><option value="en">English</option><option value="ar">Arabic</option><option value="fr">French</option><option value="es">Spanish</option><option value="mr">Marathi</option></select></div>
 <div class="quick"><button onclick="quickAsk('Summarise this document clearly.')">Summarise</button><button onclick="quickAsk('Explain the main points in simple terms.')">Explain simply</button><button onclick="quickAsk('What are the most important points in this document?')">Key points</button><button onclick="quickAsk('Create a concise study guide from this document.')">Study guide</button><button onclick="quickAsk('Critique this document and identify its weaknesses, gaps and risks.')">Critique</button><button onclick="quickAsk('How can I improve this document? Give specific actionable changes.')">Improve</button></div></aside>
-<section class="card chat"><div class="head"><div><h2>Chat with JARVIS</h2><div class="muted">Ask follow-up questions without re-uploading the document.</div></div><button class="secondary" onclick="clearChat()">Clear chat</button></div>
-<div id="messages" class="messages"><div class="empty" id="emptyState">Upload a document on the left, then ask JARVIS anything about it.</div></div>
+<section class="card chat"><div class="head"><div><h2>Chat with JARVIS</h2><div class="muted">General AI chat • automatically becomes document-aware when you upload a file.</div></div><button class="secondary" onclick="clearChat()">Clear chat</button></div>
+<div id="messages" class="messages"><div class="empty" id="emptyState">Ask JARVIS anything. Uploading a document is optional.</div></div>
 <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:10px">
 <span id="voiceStatus" class="muted">Voice ready</span>
 <div style="display:flex;gap:7px">
@@ -53,16 +54,19 @@ button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:70
 <span>Robotics &amp; Artificial Intelligence</span>
 </footer></main>
 <script>
-let currentSpeech=null;
-let recognition=null;
+let currentAudio=null;
+let currentAudioUrl=null;
+let mediaRecorder=null;
+let recordedChunks=[];
+let currentStream=null;
 
 const LANGUAGE_SETTINGS={
- auto:{name:"Auto",locale:"en-GB",prefix:""},
- en:{name:"English",locale:"en-GB",prefix:"en"},
- ar:{name:"Arabic",locale:"ar-SA",prefix:"ar"},
- fr:{name:"French",locale:"fr-FR",prefix:"fr"},
- es:{name:"Spanish",locale:"es-ES",prefix:"es"},
- mr:{name:"Marathi",locale:"mr-IN",prefix:"mr"}
+ auto:{name:"Auto",locale:"en-GB"},
+ en:{name:"English",locale:"en-GB"},
+ ar:{name:"Arabic",locale:"ar-XA"},
+ fr:{name:"French",locale:"fr-FR"},
+ es:{name:"Spanish",locale:"es-ES"},
+ mr:{name:"Marathi",locale:"mr-IN"}
 };
 
 function selectedLanguage(){
@@ -86,60 +90,138 @@ function detectLanguageFromText(text){
  return "en";
 }
 
-function chooseVoice(langCode){
- const voices=window.speechSynthesis.getVoices();
- const cfg=LANGUAGE_SETTINGS[langCode]||LANGUAGE_SETTINGS.en;
- const prefix=(cfg.prefix||"en").toLowerCase();
- const exact=voices.find(v=>v.lang.toLowerCase()===cfg.locale.toLowerCase());
- if(exact) return exact;
- const same=voices.find(v=>v.lang.toLowerCase().startsWith(prefix));
- if(same) return same;
- if(langCode==="en"){
-   return voices.find(v=>v.lang.toLowerCase().startsWith("en-gb") &&
-     ["ryan","george","arthur","daniel","oliver"].some(n=>v.name.toLowerCase().includes(n)))
-     || voices.find(v=>v.lang.toLowerCase().startsWith("en-gb"))
-     || voices.find(v=>v.lang.toLowerCase().startsWith("en"));
+function cleanupAudio(){
+ if(currentAudio){
+   try{currentAudio.pause();}catch{}
+   currentAudio=null;
  }
- return voices.find(v=>v.lang.toLowerCase().startsWith("en")) || voices[0] || null;
+ if(currentAudioUrl){
+   URL.revokeObjectURL(currentAudioUrl);
+   currentAudioUrl=null;
+ }
 }
 
-function speakText(text){
- if(!("speechSynthesis" in window)){document.getElementById("voiceStatus").textContent="Speech unavailable";return;}
- window.speechSynthesis.cancel();
- const langCode=detectLanguageFromText(text);
- const cfg=LANGUAGE_SETTINGS[langCode]||LANGUAGE_SETTINGS.en;
- currentSpeech=new SpeechSynthesisUtterance(text);
- const voice=chooseVoice(langCode);
- if(voice) currentSpeech.voice=voice;
- currentSpeech.lang=voice?.lang||cfg.locale;
- currentSpeech.rate=.96; currentSpeech.pitch=.94; currentSpeech.volume=1;
- currentSpeech.onstart=()=>document.getElementById("voiceStatus").textContent=`JARVIS is speaking • ${cfg.name}`;
- currentSpeech.onend=()=>document.getElementById("voiceStatus").textContent="Voice ready";
- currentSpeech.onerror=()=>document.getElementById("voiceStatus").textContent="Voice stopped";
- window.speechSynthesis.speak(currentSpeech);
+async function speakText(text){
+ const status=document.getElementById("voiceStatus");
+ if(!text?.trim()) return;
+ cleanupAudio();
+ status.textContent="Generating natural voice...";
+ const lang=detectLanguageFromText(text);
+
+ const fd=new FormData();
+ fd.append("text",text);
+ fd.append("language",lang);
+
+ try{
+   const r=await fetch("/tts",{method:"POST",body:fd});
+   if(!r.ok){
+     let msg="Voice generation failed.";
+     try{const x=await r.json();msg=x.error||msg;}catch{}
+     status.textContent=msg;
+     return;
+   }
+   const blob=await r.blob();
+   currentAudioUrl=URL.createObjectURL(blob);
+   currentAudio=new Audio(currentAudioUrl);
+   const cfg=LANGUAGE_SETTINGS[lang]||LANGUAGE_SETTINGS.en;
+   currentAudio.onplay=()=>status.textContent=`JARVIS is speaking • ${cfg.name}`;
+   currentAudio.onended=()=>{status.textContent="Voice ready";cleanupAudio();};
+   currentAudio.onerror=()=>{status.textContent="Voice playback failed";cleanupAudio();};
+   await currentAudio.play();
+ }catch(e){
+   status.textContent="Voice failed: "+e.message;
+   cleanupAudio();
+ }
 }
 
-function pauseSpeech(){if(window.speechSynthesis.speaking&&!window.speechSynthesis.paused){window.speechSynthesis.pause();document.getElementById("voiceStatus").textContent="Voice paused";}}
-function resumeSpeech(){if(window.speechSynthesis.paused){window.speechSynthesis.resume();document.getElementById("voiceStatus").textContent="JARVIS is speaking...";}}
-function stopSpeech(){if("speechSynthesis" in window)window.speechSynthesis.cancel();currentSpeech=null;const s=document.getElementById("voiceStatus");if(s)s.textContent="Voice ready";}
+function pauseSpeech(){
+ if(currentAudio && !currentAudio.paused){
+   currentAudio.pause();
+   document.getElementById("voiceStatus").textContent="Voice paused";
+ }
+}
 
-function startDictation(){
- const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
- if(!SR){document.getElementById("voiceStatus").textContent="Voice input is not supported by this browser";return;}
- if(recognition){try{recognition.stop()}catch{} recognition=null;}
- recognition=new SR();
- const chosen=selectedLanguage();
- recognition.lang=(LANGUAGE_SETTINGS[chosen]||LANGUAGE_SETTINGS.en).locale;
- recognition.interimResults=false;
- recognition.continuous=false;
- recognition.onstart=()=>document.getElementById("voiceStatus").textContent="Listening...";
- recognition.onerror=e=>document.getElementById("voiceStatus").textContent="Voice input: "+e.error;
- recognition.onend=()=>{if(document.getElementById("voiceStatus").textContent==="Listening...")document.getElementById("voiceStatus").textContent="Voice ready";recognition=null;};
- recognition.onresult=e=>{
-   const heard=e.results?.[0]?.[0]?.transcript||"";
-   if(heard){document.getElementById("question").value=heard;document.getElementById("voiceStatus").textContent="Heard you • ready to send";}
- };
- recognition.start();
+function resumeSpeech(){
+ if(currentAudio && currentAudio.paused){
+   currentAudio.play();
+   document.getElementById("voiceStatus").textContent="JARVIS is speaking...";
+ }
+}
+
+function stopSpeech(){
+ cleanupAudio();
+ document.getElementById("voiceStatus").textContent="Voice ready";
+}
+
+async function startDictation(){
+ const status=document.getElementById("voiceStatus");
+
+ if(mediaRecorder && mediaRecorder.state==="recording"){
+   mediaRecorder.stop();
+   status.textContent="Processing speech...";
+   return;
+ }
+
+ if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){
+   status.textContent="Microphone recording is not supported by this browser";
+   return;
+ }
+
+ try{
+   currentStream=await navigator.mediaDevices.getUserMedia({audio:true});
+   recordedChunks=[];
+
+   let options={};
+   const preferred=["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"];
+   const supported=preferred.find(t=>MediaRecorder.isTypeSupported?.(t));
+   if(supported) options.mimeType=supported;
+
+   mediaRecorder=new MediaRecorder(currentStream,options);
+
+   mediaRecorder.ondataavailable=e=>{
+     if(e.data && e.data.size>0) recordedChunks.push(e.data);
+   };
+
+   mediaRecorder.onerror=e=>{
+     status.textContent="Microphone error";
+     try{currentStream?.getTracks().forEach(t=>t.stop());}catch{}
+   };
+
+   mediaRecorder.onstop=async()=>{
+     try{currentStream?.getTracks().forEach(t=>t.stop());}catch{}
+     const mime=mediaRecorder.mimeType||"audio/webm";
+     const blob=new Blob(recordedChunks,{type:mime});
+     if(!blob.size){
+       status.textContent="No speech captured";
+       return;
+     }
+
+     status.textContent="Transcribing...";
+     const fd=new FormData();
+     fd.append("audio",blob,"speech.webm");
+     fd.append("language",selectedLanguage());
+
+     try{
+       const r=await fetch("/transcribe",{method:"POST",body:fd});
+       const x=await r.json();
+       if(!r.ok || x.error){
+         status.textContent=x.error||"Speech transcription failed";
+         return;
+       }
+       const q=document.getElementById("question");
+       q.value=x.text||"";
+       q.focus();
+       status.textContent=x.text ? "Heard you • ready to send" : "No speech detected";
+     }catch(e){
+       status.textContent="Speech transcription failed: "+e.message;
+     }
+   };
+
+   mediaRecorder.start();
+   status.textContent="Listening... click Speak again to stop";
+ }catch(e){
+   status.textContent=e.name==="NotAllowedError" ? "Microphone permission denied" : "Could not start microphone";
+ }
 }
 
 async function checkJarvis(){let d=document.getElementById("statusDot"),t=document.getElementById("statusText");try{let r=await fetch("/jarvis-status"),x=await r.json();if(x.connected){d.classList.add("online");t.textContent="JARVIS online • "+(x.jarvis?.brain||"Local AI")}else{d.classList.remove("online");t.textContent="JARVIS offline"}}catch{d.classList.remove("online");t.textContent="JARVIS offline"}}
@@ -160,7 +242,17 @@ m.appendChild(d);m.scrollTop=m.scrollHeight}
 async function uploadDocument(){let f=document.getElementById("documentFile"),i=document.getElementById("docInfo"),b=document.getElementById("uploadBtn");if(!f.files.length){i.textContent="Choose a document first.";return}let fd=new FormData();fd.append("file",f.files[0]);b.disabled=true;i.textContent="Uploading and extracting text...";try{let r=await fetch("/upload",{method:"POST",body:fd}),x=await r.json();i.textContent=x.error?"Error: "+x.error:`Ready: ${x.filename}\n${x.document_type} • ${x.structure} • ${x.characters_extracted.toLocaleString()} characters`;if(!x.error)await clearChat(false)}catch(e){i.textContent="Upload failed: "+e.message}finally{b.disabled=false}}
 async function quickAsk(q){document.getElementById("question").value=q;await askJarvis()}
 async function askJarvis(){let q=document.getElementById("question"),text=q.value.trim(),b=document.getElementById("askBtn");if(!text)return;addMessage("user",text);q.value="";b.disabled=true;let fd=new FormData();fd.append("question",text);fd.append("language",selectedLanguage());try{let r=await fetch("/ask",{method:"POST",body:fd}),x=await r.json();addMessage("assistant",x.error?"Error: "+x.error:(x.answer||"JARVIS returned an empty response."))}catch(e){addMessage("assistant","Request failed: "+e.message)}finally{b.disabled=false}}
-async function clearChat(clear=true){try{await fetch("/clear-chat",{method:"POST"})}catch{}document.getElementById("messages").innerHTML='<div class="empty" id="emptyState">Upload a document on the left, then ask JARVIS anything about it.</div>';if(clear)document.getElementById("question").value=""}
+async function removeDocument(){
+ try{
+   await fetch("/remove-document",{method:"POST"});
+   document.getElementById("documentFile").value="";
+   document.getElementById("docInfo").textContent="No document • General chat mode";
+   await clearChat(false);
+ }catch(e){
+   document.getElementById("docInfo").textContent="Could not remove document: "+e.message;
+ }
+}
+async function clearChat(clear=true){try{await fetch("/clear-chat",{method:"POST"})}catch{}document.getElementById("messages").innerHTML='<div class="empty" id="emptyState">Ask JARVIS anything. Uploading a document is optional.</div>';if(clear)document.getElementById("question").value=""}
 document.getElementById("question").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();askJarvis()}});checkJarvis();setInterval(checkJarvis,10000);
 </script></body></html>"""
 
@@ -204,7 +296,7 @@ async def website():
 async def jarvis_status():
     if not GEMINI_API_KEY:
         return {"connected": False, "error": "GEMINI_API_KEY is not configured."}
-    return {"connected": True, "jarvis": {"brain": f"Cloud AI • {GEMINI_MODEL}"}}
+    return {"connected": True, "jarvis": {"brain": f"Cloud AI • {GEMINI_MODEL}", "fallback": GEMINI_FALLBACK_MODEL}}
 
 @app.post("/upload")
 async def upload_document(file: UploadFile = File(...)):
@@ -234,11 +326,236 @@ async def upload_document(file: UploadFile = File(...)):
     chat_history = []
     return {"filename": file.filename, "document_type": kind, "structure": structure, "characters_extracted": len(text)}
 
+
+@app.post("/tts")
+async def text_to_speech(text: str = Form(...), language: str = Form("auto")):
+    if not GEMINI_API_KEY:
+        return Response(
+            content='{"error":"Cloud voice is not configured."}',
+            status_code=503,
+            media_type="application/json",
+        )
+
+    spoken_text = text.strip()
+    if not spoken_text:
+        return Response(
+            content='{"error":"There is no text to read."}',
+            status_code=400,
+            media_type="application/json",
+        )
+
+    spoken_text = spoken_text[:9000]
+
+    voice_profiles = {
+        "en": {
+            "voice": "Enceladus",
+            "direction": """A highly natural adult British male voice with refined Received-Pronunciation / polished London English.
+Sound intelligent, warm, composed and convincingly human rather than like an announcer or synthetic assistant.
+Use realistic conversational timing, subtle changes in pace and emphasis, soft sentence endings, and small natural pauses.
+Include occasional quiet audible inhalations between sentences or thought groups where a real speaker would naturally breathe.
+The breaths must be subtle and organic, not exaggerated, not after every sentence, and never spoken as words like 'inhale' or 'breath'.
+Allow tiny human imperfections in rhythm and micro-pauses while keeping pronunciation clear.
+Do not sound theatrical, robotic, over-energetic or like a commercial voice-over."""
+        },
+        "ar": {
+            "voice": "Iapetus",
+            "direction": "Natural fluent Modern Standard Arabic, authentic Arabic pronunciation, calm intelligent male-assistant delivery, natural pacing."
+        },
+        "fr": {
+            "voice": "Iapetus",
+            "direction": "Native metropolitan French pronunciation with a convincing French accent, relaxed intelligent male delivery and natural pacing."
+        },
+        "es": {
+            "voice": "Iapetus",
+            "direction": "Native European Spanish pronunciation with a convincing Spain Spanish accent, relaxed intelligent male delivery and natural pacing."
+        },
+        "mr": {
+            "voice": "Iapetus",
+            "direction": "Native Marathi pronunciation as spoken naturally in Maharashtra, India, with fluent rhythm and a calm intelligent male delivery."
+        },
+        "auto": {
+            "voice": "Iapetus",
+            "direction": "Detect the language of the text and use a convincing native pronunciation and natural human conversational delivery."
+        },
+    }
+    profile = voice_profiles.get(language, voice_profiles["auto"])
+
+    tts_prompt = f"""AUDIO PROFILE
+You are the speaking voice of JARVIS Scholar.
+
+DIRECTOR'S NOTES
+{profile["direction"]}
+
+PERFORMANCE RULES
+- Read the supplied answer faithfully.
+- Do not translate, summarise, explain, add an introduction, or omit content.
+- Ignore markdown symbols as formatting rather than reading punctuation names aloud.
+- Keep lists intelligible with brief pauses.
+- The performance should sound like one person naturally speaking to the user.
+
+TEXT TO SPEAK
+{spoken_text}
+"""
+
+    payload = {
+        "model": "gemini-3.1-flash-tts-preview",
+        "input": tts_prompt,
+        "response_format": {"type": "audio"},
+        "generation_config": {
+            "speech_config": [
+                {"voice": profile["voice"]}
+            ]
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                "https://generativelanguage.googleapis.com/v1beta/interactions",
+                headers={
+                    "x-goog-api-key": GEMINI_API_KEY,
+                    "Content-Type": "application/json",
+                    "Api-Revision": "2026-05-20",
+                },
+                json=payload,
+            )
+
+        if response.status_code != 200:
+            try:
+                detail = response.json().get("error", {}).get("message", "")
+            except Exception:
+                detail = response.text[:300]
+            return Response(
+                content='{"error":' + repr(f"Cloud voice returned HTTP {response.status_code}: {detail or 'request failed'}").replace("'", '"') + "}",
+                status_code=502,
+                media_type="application/json",
+            )
+
+        result = response.json()
+        audio_block = None
+        for step in result.get("steps", []):
+            for block in step.get("content", []):
+                if block.get("type") == "audio" and block.get("data"):
+                    audio_block = block
+                    break
+            if audio_block:
+                break
+
+        if not audio_block:
+            return Response(
+                content='{"error":"Cloud voice returned no audio."}',
+                status_code=502,
+                media_type="application/json",
+            )
+
+        audio_bytes = base64.b64decode(audio_block["data"])
+        mime_type = audio_block.get("mime_type") or "audio/wav"
+        return Response(content=audio_bytes, media_type=mime_type)
+
+    except Exception as error:
+        return Response(
+            content='{"error":' + repr(f"Voice request failed: {error}").replace("'", '"') + "}",
+            status_code=502,
+            media_type="application/json",
+        )
+
+
+@app.post("/transcribe")
+async def transcribe_speech(
+    audio: UploadFile = File(...),
+    language: str = Form("auto"),
+):
+    if not GEMINI_API_KEY:
+        return {"error": "Cloud speech recognition is not configured."}
+
+    data = await audio.read()
+    if not data:
+        return {"error": "No microphone audio was received."}
+    if len(data) > 18 * 1024 * 1024:
+        return {"error": "Speech recording is too large. Please keep it shorter."}
+
+    mime_type = (audio.content_type or "audio/webm").split(";")[0]
+    b64_audio = base64.b64encode(data).decode("ascii")
+
+    language_hints = {
+        "en": "The expected language is English.",
+        "ar": "The expected language is Arabic.",
+        "fr": "The expected language is French.",
+        "es": "The expected language is Spanish.",
+        "mr": "The expected language is Marathi.",
+        "auto": "Automatically detect whether the speaker is using English, Arabic, French, Spanish or Marathi.",
+    }
+
+    prompt = (
+        "Transcribe this microphone recording accurately. "
+        "Return only what the person said, with normal punctuation. "
+        "Do not translate, explain, label the language or add commentary. "
+        + language_hints.get(language, language_hints["auto"])
+    )
+
+    models_to_try = ["gemini-3.8-flash", GEMINI_FALLBACK_MODEL]
+    last_error = ""
+    for model_name in models_to_try:
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {
+                            "inlineData": {
+                                "mimeType": mime_type,
+                                "data": b64_audio,
+                            }
+                        },
+                    ],
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.0,
+                "maxOutputTokens": 512,
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+                    headers={
+                        "x-goog-api-key": GEMINI_API_KEY,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+
+            if response.status_code != 200:
+                try:
+                    last_error = response.json().get("error", {}).get("message", "")
+                except Exception:
+                    last_error = response.text[:300]
+                continue
+
+            result = response.json()
+            candidates = result.get("candidates") or []
+            if not candidates:
+                last_error = "No transcription candidate returned."
+                continue
+
+            parts = candidates[0].get("content", {}).get("parts", [])
+            transcript = "\n".join(p.get("text", "") for p in parts if p.get("text")).strip()
+            if transcript:
+                return {"text": transcript, "model": model_name}
+            last_error = "No speech could be recognised."
+
+        except Exception as error:
+            last_error = str(error)
+
+    return {"error": f"Speech recognition failed: {last_error or 'request failed'}"}
+
+
 @app.post("/ask")
 async def ask_question(question: str = Form(...), language: str = Form("auto")):
     global chat_history
-    if not uploaded_document_text:
-        return {"error": "Upload a document before asking a question."}
     if not question.strip():
         return {"error": "Please enter a question."}
     if not GEMINI_API_KEY:
@@ -254,45 +571,20 @@ async def ask_question(question: str = Form(...), language: str = Form("auto")):
     }
     language_instruction = supported_languages.get(language, supported_languages["auto"])
 
-    context_limit = 120000
-    document_context = uploaded_document_text[:context_limit]
-    context_truncated = len(uploaded_document_text) > context_limit
-    history = "\\n".join(f"{x['role'].upper()}: {x['content']}" for x in chat_history[-12:])
+    history = "\n".join(
+        f"{x['role'].upper()}: {x['content']}" for x in chat_history[-16:]
+    )
 
-    prompt = f"""You are JARVIS Scholar, an advanced document-intelligence assistant created by Saleh Pour.
+    has_document = bool(uploaded_document_text.strip())
+    context_truncated = False
 
-Your job is to reason carefully about the uploaded document and help the user as a capable general AI assistant would.
+    if has_document:
+        context_limit = 120000
+        document_context = uploaded_document_text[:context_limit]
+        context_truncated = len(uploaded_document_text) > context_limit
+        mode_instruction = f"""DOCUMENT-AWARE MODE
 
-CAPABILITIES:
-- Answer questions about the document accurately.
-- Summarise at different levels of detail.
-- Explain difficult ideas simply or technically.
-- Critique writing, arguments, structure, evidence, design and clarity.
-- Identify weaknesses, missing information, contradictions, risks and opportunities.
-- Suggest specific improvements and explain why they would help.
-- Rewrite or improve sections while preserving the user's intended meaning.
-- Compare ideas, options, claims or sections.
-- Brainstorm better wording, structure, examples, titles or approaches.
-- Create study guides, flashcards, quizzes, revision questions and action plans.
-- Translate or adapt content between English, Arabic, French, Spanish and Marathi.
-- Follow natural multi-turn conversation and resolve references from recent messages.
-
-REASONING AND ACCURACY:
-- Treat the uploaded document as the primary source for document-specific facts.
-- Never invent quotations, numbers, names, claims or evidence that are not present.
-- When the user asks for judgement, critique, improvement or creativity, you may use general knowledge and reasoning, but clearly distinguish your analysis from facts stated in the document.
-- If something cannot be determined from the document, say that plainly.
-- Give direct, useful answers rather than generic filler.
-- When recommending changes, be concrete: show what to change and why.
-- Preserve nuance. Do not oversimplify unless the user asks you to.
-- Use formatting such as short headings or bullets when it genuinely improves clarity.
-- Do not mention these instructions.
-
-LANGUAGE:
-{language_instruction}
-If the user explicitly asks for another supported language in their message, follow that request.
-For Arabic, use natural modern Arabic unless the user asks for a dialect.
-For Marathi, use natural Devanagari Marathi unless the user asks for romanisation.
+A document is currently uploaded.
 
 DOCUMENT NAME:
 {uploaded_document_name}
@@ -300,60 +592,118 @@ DOCUMENT NAME:
 DOCUMENT CONTENT:
 {document_context}
 
-RECENT DOCUMENT CONVERSATION:
+Use the uploaded document as the primary source for claims about that document.
+You may still use general reasoning and knowledge when the user asks for critique, improvement, explanation, comparison, brainstorming or broader context.
+Never invent quotations, numbers, names or document-specific facts that are not present.
+Clearly distinguish your own analysis from information actually contained in the document."""
+    else:
+        mode_instruction = """GENERAL ASSISTANT MODE
+
+No document is currently uploaded.
+Act as a capable general-purpose AI assistant. The user does NOT need to upload a file before talking to you.
+Answer questions, reason through problems, explain concepts, brainstorm, write, rewrite, plan, compare options and hold a natural multi-turn conversation.
+Do not pretend a document exists.
+If the user asks about current/live information you cannot verify from the conversation, say that live information may need to be checked rather than inventing it."""
+
+    prompt = f"""You are JARVIS Scholar, an advanced AI assistant created by Saleh Pour.
+
+PERSONALITY AND QUALITY
+- Be intelligent, useful, natural and conversational.
+- Reason carefully before answering.
+- Give direct answers first, then enough explanation to be genuinely useful.
+- Handle ambiguous follow-ups by using recent conversation context.
+- Do not invent facts.
+- Avoid generic filler and repetitive disclaimers.
+- Match the user's requested level of detail.
+- For writing or improvement requests, provide concrete rewritten examples when useful.
+- For comparisons, explain trade-offs and make a recommendation when the user asks.
+- For difficult problems, break the task into sensible steps without exposing hidden chain-of-thought.
+- You can analyse, critique, improve, rewrite, summarise, translate, teach, brainstorm, compare, quiz, plan and answer general questions.
+
+{mode_instruction}
+
+LANGUAGE
+{language_instruction}
+If the user explicitly requests another supported language in the message, follow that request.
+For Arabic, use natural Modern Standard Arabic unless a dialect is requested.
+For Marathi, use natural Devanagari Marathi unless romanisation is requested.
+
+RECENT CONVERSATION
 {history or '(none)'}
 
-LATEST USER MESSAGE:
+LATEST USER MESSAGE
 {question.strip()}
 """
 
-    payload = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.35,
-            "topP": 0.9,
-            "maxOutputTokens": 4096,
-        },
-    }
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
-    try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                url,
-                headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-                json=payload,
-            )
-        if response.status_code != 200:
-            try:
-                detail = response.json().get("error", {}).get("message", "")
-            except Exception:
-                detail = response.text[:300]
-            return {"error": f"Cloud AI returned HTTP {response.status_code}: {detail or 'request failed'}"}
+    models_to_try = []
+    for m in [GEMINI_MODEL, GEMINI_FALLBACK_MODEL]:
+        if m and m not in models_to_try:
+            models_to_try.append(m)
 
-        result = response.json()
-        candidates = result.get("candidates") or []
-        if not candidates:
-            return {"error": "Cloud AI returned no answer."}
-
-        parts = candidates[0].get("content", {}).get("parts", [])
-        answer = "\\n".join(part.get("text", "") for part in parts if part.get("text")).strip()
-        if not answer:
-            return {"error": "Cloud AI returned an empty answer."}
-
-        chat_history += [
-            {"role": "user", "content": question.strip()},
-            {"role": "assistant", "content": answer},
-        ]
-        return {
-            "document": uploaded_document_name,
-            "document_type": uploaded_document_type,
-            "answer": answer,
-            "brain": GEMINI_MODEL,
-            "language": language,
-            "context_truncated": context_truncated,
+    last_error = ""
+    for model_name in models_to_try:
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.45,
+                "topP": 0.92,
+                "maxOutputTokens": 4096,
+            },
         }
-    except Exception as error:
-        return {"error": f"Cloud AI request failed: {error}"}
+
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+                    headers={
+                        "x-goog-api-key": GEMINI_API_KEY,
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+
+            if response.status_code != 200:
+                try:
+                    last_error = response.json().get("error", {}).get("message", "")
+                except Exception:
+                    last_error = response.text[:300]
+                continue
+
+            result = response.json()
+            candidates = result.get("candidates") or []
+            if not candidates:
+                last_error = "Cloud AI returned no answer."
+                continue
+
+            parts = candidates[0].get("content", {}).get("parts", [])
+            answer = "\n".join(
+                part.get("text", "") for part in parts if part.get("text")
+            ).strip()
+
+            if not answer:
+                last_error = "Cloud AI returned an empty answer."
+                continue
+
+            chat_history += [
+                {"role": "user", "content": question.strip()},
+                {"role": "assistant", "content": answer},
+            ]
+
+            return {
+                "document": uploaded_document_name if has_document else None,
+                "document_type": uploaded_document_type if has_document else None,
+                "answer": answer,
+                "brain": model_name,
+                "language": language,
+                "mode": "document" if has_document else "general",
+                "context_truncated": context_truncated,
+            }
+
+        except Exception as error:
+            last_error = str(error)
+
+    return {"error": f"Cloud AI request failed: {last_error or 'all configured models failed'}"}
+
 
 @app.post("/clear-chat")
 def clear_chat():
@@ -361,8 +711,18 @@ def clear_chat():
     chat_history = []
     return {"message": "Chat history cleared."}
 
+@app.post("/remove-document")
+def remove_document():
+    global uploaded_document_text, uploaded_document_name, uploaded_document_type, chat_history
+    uploaded_document_text = ""
+    uploaded_document_name = ""
+    uploaded_document_type = ""
+    chat_history = []
+    return {"message": "Document removed. General chat mode active."}
+
+
 @app.get("/document")
 def document_info():
     if not uploaded_document_text:
-        return {"message": "No document has been uploaded yet."}
+        return {"message": "No document uploaded. General chat mode is active."}
     return {"filename": uploaded_document_name, "document_type": uploaded_document_type, "characters": len(uploaded_document_text), "chat_messages": len(chat_history)}
