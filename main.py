@@ -5,13 +5,13 @@ from docx import Document
 from pptx import Presentation
 import httpx, io, os
 
-app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="13.0.0")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="13.1.0")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
-ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "6WwXjDDEMyNmFG95zycZ").strip()
-ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "JBFqnCBsd6RMkjVDRZzb").strip()
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_v3").strip()
 uploaded_document_text = ""
 uploaded_document_name = ""
 uploaded_document_type = ""
@@ -360,20 +360,39 @@ async def text_to_speech(text: str = Form(...), language: str = Form("auto")):
             status_code=400,
         )
 
-    # Keep a single Read Aloud request reasonably sized. If ElevenLabs rejects
-    # the request or the account reaches its allowance, the browser automatically
-    # falls back to the device's built-in speech engine.
+    # Read Aloud is not a live phone-call style interaction, so we favour
+    # Eleven v3's highest-quality, most expressive speech over minimum latency.
+    # Clean light markdown so the model receives natural prose instead of symbols.
     spoken_text = spoken_text[:8000]
+    replacements = {
+        "**": "",
+        "__": "",
+        "`": "",
+        "### ": "",
+        "## ": "",
+        "# ": "",
+        "• ": "",
+    }
+    for old, new_value in replacements.items():
+        spoken_text = spoken_text.replace(old, new_value)
+
+    lines = []
+    for line in spoken_text.splitlines():
+        cleaned = line.strip()
+        if cleaned.startswith(("- ", "* ")):
+            cleaned = cleaned[2:].strip()
+        if cleaned:
+            lines.append(cleaned)
+    spoken_text = "\n".join(lines)
 
     payload = {
         "text": spoken_text,
         "model_id": ELEVENLABS_MODEL,
+        # Eleven v3 does not use similarity/style/speaker-boost controls.
+        # Natural stability keeps the delivery human and expressive without
+        # making it chaotic or exaggerated.
         "voice_settings": {
-            "stability": 0.42,
-            "similarity_boost": 0.82,
-            "style": 0.16,
-            "use_speaker_boost": True,
-            "speed": 0.97,
+            "stability": 0.5
         },
     }
 
@@ -406,8 +425,6 @@ async def text_to_speech(text: str = Form(...), language: str = Form("auto")):
             except Exception:
                 detail = response.text[:400]
 
-            # Do not expose keys or a huge provider error to visitors. The front end
-            # will automatically switch to browser/device speech when it receives this.
             if response.status_code == 429:
                 message = "Natural cloud voice allowance reached; switching to device voice."
             elif response.status_code in {401, 403}:
