@@ -1,14 +1,17 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, JSONResponse
 from pypdf import PdfReader
 from docx import Document
 from pptx import Presentation
-import httpx, io, os, base64
+import httpx, io, os
 
-app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="12.0.0")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="13.0.0")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "6WwXjDDEMyNmFG95zycZ").strip()
+ELEVENLABS_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
 uploaded_document_text = ""
 uploaded_document_name = ""
 uploaded_document_type = ""
@@ -56,11 +59,13 @@ button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:70
 <script>
 let currentAudio=null;
 let currentAudioUrl=null;
+let currentUtterance=null;
+let usingBrowserSpeech=false;
 
 const LANGUAGE_SETTINGS={
  auto:{name:"Auto",locale:"en-GB"},
  en:{name:"English",locale:"en-GB"},
- ar:{name:"Arabic",locale:"ar-XA"},
+ ar:{name:"Arabic",locale:"ar-SA"},
  fr:{name:"French",locale:"fr-FR"},
  es:{name:"Spanish",locale:"es-ES"},
  mr:{name:"Marathi",locale:"mr-IN"}
@@ -90,11 +95,64 @@ function detectLanguageFromText(text){
 function cleanupAudio(){
  if(currentAudio){
    try{currentAudio.pause();}catch{}
+   currentAudio.src="";
    currentAudio=null;
  }
  if(currentAudioUrl){
    URL.revokeObjectURL(currentAudioUrl);
    currentAudioUrl=null;
+ }
+ if("speechSynthesis" in window){
+   try{window.speechSynthesis.cancel();}catch{}
+ }
+ currentUtterance=null;
+ usingBrowserSpeech=false;
+}
+
+function chooseBrowserVoice(locale){
+ if(!("speechSynthesis" in window)) return null;
+ const voices=window.speechSynthesis.getVoices()||[];
+ const exact=voices.find(v=>v.lang?.toLowerCase()===locale.toLowerCase());
+ if(exact) return exact;
+ const base=locale.split("-")[0].toLowerCase();
+ return voices.find(v=>v.lang?.toLowerCase().startsWith(base))||null;
+}
+
+function browserSpeakText(text,lang,reason=""){
+ const status=document.getElementById("voiceStatus");
+ if(!("speechSynthesis" in window)){
+   status.textContent="Voice unavailable on this browser.";
+   return;
+ }
+ try{
+   window.speechSynthesis.cancel();
+   const cfg=LANGUAGE_SETTINGS[lang]||LANGUAGE_SETTINGS.en;
+   const utterance=new SpeechSynthesisUtterance(text);
+   utterance.lang=cfg.locale;
+   utterance.rate=0.97;
+   utterance.pitch=0.95;
+   const voice=chooseBrowserVoice(cfg.locale);
+   if(voice) utterance.voice=voice;
+   currentUtterance=utterance;
+   usingBrowserSpeech=true;
+   utterance.onstart=()=>status.textContent=`Device voice fallback • ${cfg.name}`;
+   utterance.onend=()=>{
+     status.textContent="Voice ready";
+     currentUtterance=null;
+     usingBrowserSpeech=false;
+   };
+   utterance.onerror=(e)=>{
+     if(e.error!=="canceled" && e.error!=="interrupted"){
+       status.textContent="Voice playback failed.";
+       console.error("Browser TTS error:",e);
+     }
+     currentUtterance=null;
+     usingBrowserSpeech=false;
+   };
+   if(reason) console.warn("ElevenLabs unavailable; browser fallback used:",reason);
+   window.speechSynthesis.speak(utterance);
+ }catch(e){
+   status.textContent="Voice failed: "+e.message;
  }
 }
 
@@ -102,7 +160,7 @@ async function speakText(text){
  const status=document.getElementById("voiceStatus");
  if(!text?.trim()) return;
  cleanupAudio();
- status.textContent="Generating natural voice...";
+ status.textContent="Generating JARVIS voice...";
  const lang=detectLanguageFromText(text);
 
  const fd=new FormData();
@@ -112,52 +170,70 @@ async function speakText(text){
  try{
    const r=await fetch("/tts",{method:"POST",body:fd});
    if(!r.ok){
-     let msg="Voice generation failed.";
+     let msg="Cloud voice unavailable.";
      try{
        const x=await r.json();
        msg=x.error||msg;
      }catch{
        try{msg=(await r.text())||msg;}catch{}
      }
-     status.textContent=msg;
-     console.error("JARVIS TTS:", msg);
+     browserSpeakText(text,lang,msg);
      return;
    }
-   const rawBlob=await r.blob();
-   const blob=new Blob([await rawBlob.arrayBuffer()],{type:"audio/wav"});
-   currentAudioUrl=URL.createObjectURL(blob);
-   currentAudio=new Audio();
+
+   const blob=await r.blob();
+   const contentType=r.headers.get("content-type")||blob.type||"audio/mpeg";
+   const playableBlob=blob.type ? blob : new Blob([blob],{type:contentType});
+   currentAudioUrl=URL.createObjectURL(playableBlob);
+   currentAudio=new Audio(currentAudioUrl);
    currentAudio.preload="auto";
-   currentAudio.src=currentAudioUrl;
+
    const cfg=LANGUAGE_SETTINGS[lang]||LANGUAGE_SETTINGS.en;
-   currentAudio.onplay=()=>status.textContent=`JARVIS is speaking • ${cfg.name}`;
+   currentAudio.onplay=()=>status.textContent=`JARVIS is speaking • ElevenLabs • ${cfg.name}`;
    currentAudio.onended=()=>{status.textContent="Voice ready";cleanupAudio();};
    currentAudio.onerror=()=>{
      const mediaError=currentAudio?.error;
-     const code=mediaError?.code||"unknown";
-     status.textContent=`Voice playback failed (media error ${code})`;
      console.error("JARVIS audio element error",mediaError);
      cleanupAudio();
+     browserSpeakText(text,lang,"Cloud audio could not be played.");
    };
-   currentAudio.load();
-   await currentAudio.play();
+
+   try{
+     await currentAudio.play();
+   }catch(playError){
+     console.error("Cloud audio play() failed:",playError);
+     cleanupAudio();
+     browserSpeakText(text,lang,playError.message||"Cloud playback was blocked.");
+   }
  }catch(e){
-   status.textContent="Voice failed: "+e.message;
    cleanupAudio();
+   browserSpeakText(text,lang,e.message||"Voice request failed.");
  }
 }
 
 function pauseSpeech(){
+ const status=document.getElementById("voiceStatus");
  if(currentAudio && !currentAudio.paused){
    currentAudio.pause();
-   document.getElementById("voiceStatus").textContent="Voice paused";
+   status.textContent="Voice paused";
+   return;
+ }
+ if(usingBrowserSpeech && "speechSynthesis" in window && window.speechSynthesis.speaking){
+   window.speechSynthesis.pause();
+   status.textContent="Voice paused";
  }
 }
 
 function resumeSpeech(){
+ const status=document.getElementById("voiceStatus");
  if(currentAudio && currentAudio.paused){
-   currentAudio.play();
-   document.getElementById("voiceStatus").textContent="JARVIS is speaking...";
+   currentAudio.play().catch(()=>{});
+   status.textContent="JARVIS is speaking...";
+   return;
+ }
+ if(usingBrowserSpeech && "speechSynthesis" in window && window.speechSynthesis.paused){
+   window.speechSynthesis.resume();
+   status.textContent="JARVIS is speaking...";
  }
 }
 
@@ -271,163 +347,101 @@ async def upload_document(file: UploadFile = File(...)):
 
 @app.post("/tts")
 async def text_to_speech(text: str = Form(...), language: str = Form("auto")):
-    if not GEMINI_API_KEY:
-        return Response(
-            content='{"error":"Cloud voice is not configured."}',
+    if not ELEVENLABS_API_KEY:
+        return JSONResponse(
+            {"error": "ElevenLabs voice is not configured; using device voice fallback."},
             status_code=503,
-            media_type="application/json",
         )
 
     spoken_text = text.strip()
     if not spoken_text:
-        return Response(
-            content='{"error":"There is no text to read."}',
+        return JSONResponse(
+            {"error": "There is no text to read."},
             status_code=400,
-            media_type="application/json",
         )
 
+    # Keep a single Read Aloud request reasonably sized. If ElevenLabs rejects
+    # the request or the account reaches its allowance, the browser automatically
+    # falls back to the device's built-in speech engine.
     spoken_text = spoken_text[:8000]
 
-    voice_profiles = {
-        "en": {
-            "voice": "Enceladus",
-            "direction": """Use a very human adult British male voice: refined, posh, intelligent, calm and conversational.
-Use natural British pronunciation with a subtle RP / educated London character, never American.
-Do not sound like an announcer, audiobook narrator or commercial voice-over.
-Use natural uneven pacing, tiny micro-pauses, soft sentence endings, subtle emphasis shifts and occasional quiet breaths between thought groups.
-Breathing should be irregular and restrained, like a real person speaking naturally. Never say the words 'breath', 'inhale', 'pause' or 'sigh'.
-Short answers should sound effortless; longer answers should naturally pace and breathe."""
-        },
-        "ar": {
-            "voice": "Iapetus",
-            "direction": "Use natural fluent Modern Standard Arabic with authentic Arabic pronunciation and a calm intelligent male delivery."
-        },
-        "fr": {
-            "voice": "Iapetus",
-            "direction": "Use native metropolitan French pronunciation with a convincing French accent and natural male conversational delivery."
-        },
-        "es": {
-            "voice": "Iapetus",
-            "direction": "Use native European Spanish pronunciation with a convincing Spain Spanish accent and natural male conversational delivery."
-        },
-        "mr": {
-            "voice": "Iapetus",
-            "direction": "Use native Marathi pronunciation as spoken naturally in Maharashtra with fluent rhythm and calm male conversational delivery."
-        },
-        "auto": {
-            "voice": "Iapetus",
-            "direction": "Detect the language and speak it with convincing native pronunciation and natural human conversational pacing."
-        },
-    }
-    profile = voice_profiles.get(language, voice_profiles["auto"])
-
-    tts_prompt = f"""You are the speaking voice of JARVIS Scholar.
-
-VOICE DIRECTION
-{profile["direction"]}
-
-READING RULES
-- Read the answer faithfully.
-- Do not translate, summarise, add an introduction or omit substantive content.
-- Do not read markdown punctuation aloud.
-- Turn punctuation and paragraph structure into natural spoken phrasing.
-- For English, subtle nonverbal realism such as a quiet inhale or tiny hesitation is allowed when natural.
-- Never verbalise stage directions.
-- Keep the result restrained and convincingly human.
-
-TEXT TO SPEAK:
-{spoken_text}
-"""
-
-    # Use the officially documented Gemini generateContent TTS endpoint.
-    # Gemini returns 24 kHz, 16-bit, mono PCM in inlineData; we wrap it as WAV.
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": tts_prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "responseModalities": ["AUDIO"],
-            "speechConfig": {
-                "voiceConfig": {
-                    "prebuiltVoiceConfig": {
-                        "voiceName": profile["voice"]
-                    }
-                }
-            }
-        }
+        "text": spoken_text,
+        "model_id": ELEVENLABS_MODEL,
+        "voice_settings": {
+            "stability": 0.42,
+            "similarity_boost": 0.82,
+            "style": 0.16,
+            "use_speaker_boost": True,
+            "speed": 0.97,
+        },
     }
+
+    url = (
+        f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+        "?output_format=mp3_44100_128"
+    )
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             response = await client.post(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+                url,
                 headers={
-                    "x-goog-api-key": GEMINI_API_KEY,
+                    "xi-api-key": ELEVENLABS_API_KEY,
                     "Content-Type": "application/json",
+                    "Accept": "audio/mpeg",
                 },
                 json=payload,
             )
 
         if response.status_code != 200:
+            detail = ""
             try:
-                detail = response.json().get("error", {}).get("message", "")
+                body = response.json()
+                detail = (
+                    body.get("detail", {}).get("message")
+                    if isinstance(body.get("detail"), dict)
+                    else body.get("detail")
+                ) or body.get("message", "")
             except Exception:
-                detail = response.text[:500]
-            return Response(
-                content='{"error":' + repr(
-                    f"Cloud voice returned HTTP {response.status_code}: {detail or 'request failed'}"
-                ).replace("'", '"') + "}",
+                detail = response.text[:400]
+
+            # Do not expose keys or a huge provider error to visitors. The front end
+            # will automatically switch to browser/device speech when it receives this.
+            if response.status_code == 429:
+                message = "Natural cloud voice allowance reached; switching to device voice."
+            elif response.status_code in {401, 403}:
+                message = "Natural cloud voice is temporarily unavailable; switching to device voice."
+            else:
+                message = "Natural cloud voice could not be generated; switching to device voice."
+
+            if detail:
+                print(f"ElevenLabs TTS HTTP {response.status_code}: {detail}")
+
+            return JSONResponse({"error": message}, status_code=502)
+
+        audio_bytes = response.content
+        if not audio_bytes:
+            return JSONResponse(
+                {"error": "Natural cloud voice returned no audio; switching to device voice."},
                 status_code=502,
-                media_type="application/json",
             )
-
-        result = response.json()
-
-        try:
-            part = result["candidates"][0]["content"]["parts"][0]
-            inline = part.get("inlineData") or part.get("inline_data")
-            if not inline or not inline.get("data"):
-                raise KeyError("inlineData.data")
-            pcm_bytes = base64.b64decode(inline["data"])
-        except Exception:
-            return Response(
-                content='{"error":"Gemini returned a response, but no TTS audio data was found."}',
-                status_code=502,
-                media_type="application/json",
-            )
-
-        # Gemini's documented TTS output is raw 24kHz signed 16-bit mono PCM.
-        # Wrap it in a standard WAV container so every modern browser can play it.
-        import wave
-        wav_buffer = io.BytesIO()
-        with wave.open(wav_buffer, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(24000)
-            wav_file.writeframes(pcm_bytes)
-
-        wav_bytes = wav_buffer.getvalue()
 
         return Response(
-            content=wav_bytes,
-            media_type="audio/wav",
+            content=audio_bytes,
+            media_type="audio/mpeg",
             headers={
-                "Content-Disposition": 'inline; filename="jarvis-voice.wav"',
-                "Content-Length": str(len(wav_bytes)),
-                "Accept-Ranges": "bytes",
+                "Content-Disposition": 'inline; filename="jarvis-voice.mp3"',
+                "Content-Length": str(len(audio_bytes)),
                 "Cache-Control": "no-store",
             },
         )
 
     except Exception as error:
-        return Response(
-            content='{"error":' + repr(f"Voice request failed: {error}").replace("'", '"') + "}",
+        print(f"ElevenLabs TTS request failed: {error}")
+        return JSONResponse(
+            {"error": "Natural cloud voice is unavailable; switching to device voice."},
             status_code=502,
-            media_type="application/json",
         )
 
 
