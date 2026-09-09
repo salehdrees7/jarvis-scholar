@@ -5,7 +5,7 @@ from docx import Document
 from pptx import Presentation
 import httpx, io, os, base64
 
-app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="10.0.0")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="11.0.0")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
@@ -341,7 +341,7 @@ TEXT TO SPEAK
     payload = {
         "model": "gemini-3.1-flash-tts-preview",
         "input": tts_prompt,
-        "response_format": {"type": "audio"},
+        "response_format": {"type": "audio", "mime_type": "audio/wav", "delivery": "inline"},
         "generation_config": {
             "speech_config": [
                 {"voice": profile["voice"]}
@@ -408,7 +408,31 @@ TEXT TO SPEAK
 
         audio_bytes = base64.b64decode(audio_block["data"])
         mime_type = audio_block.get("mime_type") or audio_block.get("mimeType") or "audio/wav"
-        return Response(content=audio_bytes, media_type=mime_type)
+
+        # A browser needs a real media container. If Gemini gives us raw L16/PCM,
+        # wrap the 24 kHz, 16-bit, mono samples in a WAV container.
+        looks_like_wav = audio_bytes[:4] == b"RIFF" and audio_bytes[8:12] == b"WAVE"
+        raw_pcm_types = {"audio/l16", "audio/pcm", "audio/raw"}
+
+        if not looks_like_wav and (mime_type.lower() in raw_pcm_types or mime_type.lower() == "audio/wav"):
+            import wave
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, "wb") as wav_file:
+                wav_file.setnchannels(int(audio_block.get("channels") or 1))
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(int(audio_block.get("sample_rate") or audio_block.get("sampleRate") or 24000))
+                wav_file.writeframes(audio_bytes)
+            audio_bytes = wav_buffer.getvalue()
+            mime_type = "audio/wav"
+
+        return Response(
+            content=audio_bytes,
+            media_type=mime_type,
+            headers={
+                "Content-Disposition": 'inline; filename="jarvis-voice.wav"',
+                "Cache-Control": "no-store",
+            },
+        )
 
     except Exception as error:
         return Response(
