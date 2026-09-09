@@ -5,7 +5,7 @@ from docx import Document
 from pptx import Presentation
 import httpx, io, os, base64
 
-app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="8.0.0")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="9.0.0")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
@@ -26,7 +26,7 @@ h1{margin:0;font-size:22px;letter-spacing:.15em}.muted,.status{color:var(--muted
 .layout{display:grid;grid-template-columns:330px 1fr;gap:20px}.card{background:var(--panel);border:1px solid var(--border);border-radius:18px}.side{padding:20px;min-height:680px}
 .drop{margin-top:18px;padding:22px 14px;text-align:center;border:1.5px dashed #31566f;border-radius:14px;background:#0a1724}.drop strong{display:block;margin-bottom:8px}input[type=file]{width:100%;margin-top:14px;color:var(--muted)}
 button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:700;cursor:pointer}.primary{background:#57c7ff;color:#03131e}.secondary{background:#14283a;color:var(--text);border:1px solid var(--border)}.full{width:100%;margin-top:12px}
-.info{margin-top:14px;padding:12px;border:1px solid #17334a;border-radius:11px;background:#091724;color:var(--muted);font-size:13px;white-space:pre-wrap}.quick{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px}.quick button{background:#10263a;color:#cdefff;border:1px solid #224761;font-size:12px}.langbox{margin-top:14px}.langbox label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.langbox select{width:100%;background:#091724;color:var(--text);border:1px solid #224761;border-radius:11px;padding:10px 12px;font:inherit}.mic{white-space:nowrap}
+.info{margin-top:14px;padding:12px;border:1px solid #17334a;border-radius:11px;background:#091724;color:var(--muted);font-size:13px;white-space:pre-wrap}.quick{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px}.quick button{background:#10263a;color:#cdefff;border:1px solid #224761;font-size:12px}.langbox{margin-top:14px}.langbox label{display:block;margin-bottom:6px;color:var(--muted);font-size:12px}.langbox select{width:100%;background:#091724;color:var(--text);border:1px solid #224761;border-radius:11px;padding:10px 12px;font:inherit}
 .chat{display:flex;flex-direction:column;min-height:680px;overflow:hidden}.head{padding:18px 20px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between}.messages{flex:1;padding:22px;overflow:auto;max-height:540px}.empty{text-align:center;color:var(--muted);padding:90px 20px}
 .msg{max-width:82%;margin-bottom:14px;padding:13px 15px;border-radius:14px;white-space:pre-wrap;line-height:1.6}.user{margin-left:auto;background:#15354b}.assistant{margin-right:auto;background:#0c2232}.role{display:block;font-size:11px;color:var(--muted);margin-bottom:5px}
 .composer{padding:16px;border-top:1px solid var(--border);background:#0a1724}textarea{width:100%;min-height:84px;border-radius:13px;border:1px solid var(--border);background:#07131f;color:var(--text);padding:13px;font:inherit}.row{display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:10px}
@@ -48,7 +48,7 @@ button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:70
 <button class="secondary" onclick="stopSpeech()">⏹ Stop</button>
 </div>
 </div>
-<div class="composer"><textarea id="question" placeholder="Ask anything: improve it, rewrite it, explain it, translate it, compare it..."></textarea><div class="row"><span class="muted">JARVIS can analyse, critique, improve, rewrite, translate and teach from the document.</span><div style="display:flex;gap:8px"><button class="secondary mic" onclick="startDictation()">🎙 Speak</button><button id="askBtn" class="primary" onclick="askJarvis()">Ask JARVIS</button></div></div></div></section></div>
+<div class="composer"><textarea id="question" placeholder="Ask anything: improve it, rewrite it, explain it, translate it, compare it..."></textarea><div class="row"><span class="muted">JARVIS can chat normally, or analyse, critique, improve, rewrite, translate and teach from an uploaded document.</span><button id="askBtn" class="primary" onclick="askJarvis()">Ask JARVIS</button></div></div></section></div>
 <footer style="text-align:center;color:#98adbf;font-size:12px;padding:24px 10px 4px">
 <strong style="color:#f3f7fb">JARVIS Scholar</strong> — Built by <strong style="color:#cdefff">Saleh Pour</strong><br>
 <span>Robotics &amp; Artificial Intelligence</span>
@@ -56,9 +56,6 @@ button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:70
 <script>
 let currentAudio=null;
 let currentAudioUrl=null;
-let mediaRecorder=null;
-let recordedChunks=[];
-let currentStream=null;
 
 const LANGUAGE_SETTINGS={
  auto:{name:"Auto",locale:"en-GB"},
@@ -151,77 +148,6 @@ function resumeSpeech(){
 function stopSpeech(){
  cleanupAudio();
  document.getElementById("voiceStatus").textContent="Voice ready";
-}
-
-async function startDictation(){
- const status=document.getElementById("voiceStatus");
-
- if(mediaRecorder && mediaRecorder.state==="recording"){
-   mediaRecorder.stop();
-   status.textContent="Processing speech...";
-   return;
- }
-
- if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){
-   status.textContent="Microphone recording is not supported by this browser";
-   return;
- }
-
- try{
-   currentStream=await navigator.mediaDevices.getUserMedia({audio:true});
-   recordedChunks=[];
-
-   let options={};
-   const preferred=["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"];
-   const supported=preferred.find(t=>MediaRecorder.isTypeSupported?.(t));
-   if(supported) options.mimeType=supported;
-
-   mediaRecorder=new MediaRecorder(currentStream,options);
-
-   mediaRecorder.ondataavailable=e=>{
-     if(e.data && e.data.size>0) recordedChunks.push(e.data);
-   };
-
-   mediaRecorder.onerror=e=>{
-     status.textContent="Microphone error";
-     try{currentStream?.getTracks().forEach(t=>t.stop());}catch{}
-   };
-
-   mediaRecorder.onstop=async()=>{
-     try{currentStream?.getTracks().forEach(t=>t.stop());}catch{}
-     const mime=mediaRecorder.mimeType||"audio/webm";
-     const blob=new Blob(recordedChunks,{type:mime});
-     if(!blob.size){
-       status.textContent="No speech captured";
-       return;
-     }
-
-     status.textContent="Transcribing...";
-     const fd=new FormData();
-     fd.append("audio",blob,"speech.webm");
-     fd.append("language",selectedLanguage());
-
-     try{
-       const r=await fetch("/transcribe",{method:"POST",body:fd});
-       const x=await r.json();
-       if(!r.ok || x.error){
-         status.textContent=x.error||"Speech transcription failed";
-         return;
-       }
-       const q=document.getElementById("question");
-       q.value=x.text||"";
-       q.focus();
-       status.textContent=x.text ? "Heard you • ready to send" : "No speech detected";
-     }catch(e){
-       status.textContent="Speech transcription failed: "+e.message;
-     }
-   };
-
-   mediaRecorder.start();
-   status.textContent="Listening... click Speak again to stop";
- }catch(e){
-   status.textContent=e.name==="NotAllowedError" ? "Microphone permission denied" : "Could not start microphone";
- }
 }
 
 async function checkJarvis(){let d=document.getElementById("statusDot"),t=document.getElementById("statusText");try{let r=await fetch("/jarvis-status"),x=await r.json();if(x.connected){d.classList.add("online");t.textContent="JARVIS online • "+(x.jarvis?.brain||"Local AI")}else{d.classList.remove("online");t.textContent="JARVIS offline"}}catch{d.classList.remove("online");t.textContent="JARVIS offline"}}
@@ -349,13 +275,18 @@ async def text_to_speech(text: str = Form(...), language: str = Form("auto")):
     voice_profiles = {
         "en": {
             "voice": "Enceladus",
-            "direction": """A highly natural adult British male voice with refined Received-Pronunciation / polished London English.
-Sound intelligent, warm, composed and convincingly human rather than like an announcer or synthetic assistant.
-Use realistic conversational timing, subtle changes in pace and emphasis, soft sentence endings, and small natural pauses.
-Include occasional quiet audible inhalations between sentences or thought groups where a real speaker would naturally breathe.
-The breaths must be subtle and organic, not exaggerated, not after every sentence, and never spoken as words like 'inhale' or 'breath'.
-Allow tiny human imperfections in rhythm and micro-pauses while keeping pronunciation clear.
-Do not sound theatrical, robotic, over-energetic or like a commercial voice-over."""
+            "direction": """A very human adult British male voice inspired by a refined personal AI butler: polished, posh, intelligent, calm and conversational.
+Use natural British English pronunciation with a subtle RP / educated London character, never American.
+
+The performance must feel like a person speaking spontaneously to one listener, not like a narrator reading text.
+Use realistic phrasing, uneven micro-pauses, tiny timing imperfections, gentle changes in tempo, and subtle emphasis shifts.
+At the ends of some sentences, let the voice soften naturally instead of landing every line with the same cadence.
+Between selected sentences or thought groups, include a quiet natural inhale or breath where a real speaker would need one.
+The breathing should be audible but subtle: occasional, irregular and organic, never forced, never after every sentence, and never spoken as literal words.
+Where appropriate, allow very light conversational hesitation or thinking rhythm before a complex point, but do not insert distracting filler into factual answers.
+Short answers should sound effortless. Longer answers should breathe, pace themselves and feel physically spoken.
+Avoid announcer cadence, audiobook cadence, commercial polish, exaggerated acting, robotic timing, over-enunciation or sing-song prosody.
+The overall result should sound like an intelligent human assistant standing nearby and speaking naturally."""
         },
         "ar": {
             "voice": "Iapetus",
@@ -387,10 +318,14 @@ DIRECTOR'S NOTES
 {profile["direction"]}
 
 PERFORMANCE RULES
-- Read the supplied answer faithfully.
-- Do not translate, summarise, explain, add an introduction, or omit content.
-- Ignore markdown symbols as formatting rather than reading punctuation names aloud.
-- Keep lists intelligible with brief pauses.
+- Preserve the meaning and wording of the supplied answer.
+- Do not translate, summarise, explain, add an introduction, or omit substantive content.
+- Do not read markdown symbols aloud.
+- Convert punctuation and paragraph structure into natural spoken phrasing instead of mechanically reading punctuation.
+- For English only, use subtle nonverbal performance such as a quiet inhale, soft exhale, tiny hesitation or brief thinking pause when it improves realism.
+- Never announce or verbalise stage directions such as "breath", "inhale", "pause" or "sigh".
+- Do not overuse nonverbal sounds; realism comes from restraint and irregularity.
+- Keep lists intelligible with short natural pauses.
 - The performance should sound like one person naturally speaking to the user.
 
 TEXT TO SPEAK
@@ -458,99 +393,6 @@ TEXT TO SPEAK
             status_code=502,
             media_type="application/json",
         )
-
-
-@app.post("/transcribe")
-async def transcribe_speech(
-    audio: UploadFile = File(...),
-    language: str = Form("auto"),
-):
-    if not GEMINI_API_KEY:
-        return {"error": "Cloud speech recognition is not configured."}
-
-    data = await audio.read()
-    if not data:
-        return {"error": "No microphone audio was received."}
-    if len(data) > 18 * 1024 * 1024:
-        return {"error": "Speech recording is too large. Please keep it shorter."}
-
-    mime_type = (audio.content_type or "audio/webm").split(";")[0]
-    b64_audio = base64.b64encode(data).decode("ascii")
-
-    language_hints = {
-        "en": "The expected language is English.",
-        "ar": "The expected language is Arabic.",
-        "fr": "The expected language is French.",
-        "es": "The expected language is Spanish.",
-        "mr": "The expected language is Marathi.",
-        "auto": "Automatically detect whether the speaker is using English, Arabic, French, Spanish or Marathi.",
-    }
-
-    prompt = (
-        "Transcribe this microphone recording accurately. "
-        "Return only what the person said, with normal punctuation. "
-        "Do not translate, explain, label the language or add commentary. "
-        + language_hints.get(language, language_hints["auto"])
-    )
-
-    models_to_try = ["gemini-3.8-flash", GEMINI_FALLBACK_MODEL]
-    last_error = ""
-    for model_name in models_to_try:
-        payload = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [
-                        {"text": prompt},
-                        {
-                            "inlineData": {
-                                "mimeType": mime_type,
-                                "data": b64_audio,
-                            }
-                        },
-                    ],
-                }
-            ],
-            "generationConfig": {
-                "temperature": 0.0,
-                "maxOutputTokens": 512,
-            },
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                response = await client.post(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-                    headers={
-                        "x-goog-api-key": GEMINI_API_KEY,
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-
-            if response.status_code != 200:
-                try:
-                    last_error = response.json().get("error", {}).get("message", "")
-                except Exception:
-                    last_error = response.text[:300]
-                continue
-
-            result = response.json()
-            candidates = result.get("candidates") or []
-            if not candidates:
-                last_error = "No transcription candidate returned."
-                continue
-
-            parts = candidates[0].get("content", {}).get("parts", [])
-            transcript = "\n".join(p.get("text", "") for p in parts if p.get("text")).strip()
-            if transcript:
-                return {"text": transcript, "model": model_name}
-            last_error = "No speech could be recognised."
-
-        except Exception as error:
-            last_error = str(error)
-
-    return {"error": f"Speech recognition failed: {last_error or 'request failed'}"}
 
 
 @app.post("/ask")
