@@ -5,7 +5,7 @@ from docx import Document
 from pptx import Presentation
 import httpx, io, os, base64
 
-app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="9.0.0")
+app = FastAPI(title="JARVIS Scholar", description="Cloud document intelligence by JARVIS Scholar.", version="10.0.0")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
 GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip()
@@ -113,8 +113,14 @@ async function speakText(text){
    const r=await fetch("/tts",{method:"POST",body:fd});
    if(!r.ok){
      let msg="Voice generation failed.";
-     try{const x=await r.json();msg=x.error||msg;}catch{}
+     try{
+       const x=await r.json();
+       msg=x.error||msg;
+     }catch{
+       try{msg=(await r.text())||msg;}catch{}
+     }
      status.textContent=msg;
+     console.error("JARVIS TTS:", msg);
      return;
    }
    const blob=await r.blob();
@@ -367,24 +373,41 @@ TEXT TO SPEAK
             )
 
         result = response.json()
-        audio_block = None
-        for step in result.get("steps", []):
-            for block in step.get("content", []):
-                if block.get("type") == "audio" and block.get("data"):
-                    audio_block = block
-                    break
-            if audio_block:
-                break
+
+        # Interactions API returns generated TTS audio in top-level output_audio.
+        # Keep a compatibility fallback for response variants that expose audio
+        # inside output/content/steps.
+        audio_block = result.get("output_audio")
 
         if not audio_block:
+            output = result.get("output")
+            if isinstance(output, list):
+                for block in output:
+                    if isinstance(block, dict) and block.get("type") == "audio" and block.get("data"):
+                        audio_block = block
+                        break
+
+        if not audio_block:
+            for step in result.get("steps", []):
+                content = step.get("content", [])
+                if isinstance(content, dict):
+                    content = [content]
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "audio" and block.get("data"):
+                        audio_block = block
+                        break
+                if audio_block:
+                    break
+
+        if not audio_block or not audio_block.get("data"):
             return Response(
-                content='{"error":"Cloud voice returned no audio."}',
+                content='{"error":"Cloud voice returned no playable audio."}',
                 status_code=502,
                 media_type="application/json",
             )
 
         audio_bytes = base64.b64decode(audio_block["data"])
-        mime_type = audio_block.get("mime_type") or "audio/wav"
+        mime_type = audio_block.get("mime_type") or audio_block.get("mimeType") or "audio/wav"
         return Response(content=audio_bytes, media_type=mime_type)
 
     except Exception as error:
